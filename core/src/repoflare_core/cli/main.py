@@ -1,10 +1,10 @@
 """RepoFlare CLI.
 
-Implemented so far: init, analyze, status — the scan -> parse -> graph vertical slice.
-`impact`, `explain`, `verify` are intentionally not stubbed here; they depend on
-ImpactAnalyzer / ContextRetriever / BobProvider / VerificationService, none of which exist
-yet (see AGENTS.md "Next up"). A command that always errors "not implemented" is worse than
-no command at all.
+Implemented so far: init, analyze, status, impact — the scan -> parse -> graph -> impact
+vertical slice. `explain`, `verify` are intentionally not stubbed here; they depend on
+ContextRetriever / BobProvider / VerificationService, none of which exist yet (see
+AGENTS.md "Next up"). A command that always errors "not implemented" is worse than no
+command at all.
 """
 
 from __future__ import annotations
@@ -14,10 +14,14 @@ from pathlib import Path
 
 import typer
 
+from repoflare_core.change.detector import ChangeDetector
+from repoflare_core.change.git_adapter import GitAdapter, GitCommandError
 from repoflare_core.config import graph_db_path
 from repoflare_core.domain.entities import NodeKind, Repository, Snapshot
 from repoflare_core.domain.ids import stable_id
 from repoflare_core.graph.store import GraphStore
+from repoflare_core.graph.traversal import GraphTraversalService
+from repoflare_core.impact.analyzer import ImpactAnalyzer
 from repoflare_core.parsing.adapter import ParserAdapter, module_qualified_name
 from repoflare_core.parsing.resolver import CallImportResolver
 from repoflare_core.scanning.scanner import RepositoryScanner
@@ -33,6 +37,15 @@ _REPO_ROOT_ARG = typer.Argument(Path("."), help="Repository root.")
 
 def _repository_id(root: Path) -> str:
     return stable_id(str(root))
+
+
+def _current_commit_sha_if_git_repo(root: Path) -> str | None:
+    """Best-effort: a snapshot analyzed outside a git repo (or with git unavailable) is
+    still valid, it just can't be matched to a commit later by `impact`."""
+    try:
+        return GitAdapter(root).current_commit_sha()
+    except GitCommandError:
+        return None
 
 
 def _count(store: GraphStore, table: str, snapshot_id: str) -> int:
@@ -77,6 +90,7 @@ def analyze(path: Path = _REPO_ROOT_ARG) -> None:
 
     repository_id = _repository_id(root)
     snapshot_id = stable_id(str(root), datetime.now(UTC).isoformat())
+    git_commit_sha = _current_commit_sha_if_git_repo(root)
 
     parser = ParserAdapter()
     resolver = CallImportResolver()
@@ -104,7 +118,7 @@ def analyze(path: Path = _REPO_ROOT_ARG) -> None:
             Snapshot(
                 snapshot_id=snapshot_id,
                 repository_id=repository_id,
-                git_commit_sha=None,
+                git_commit_sha=git_commit_sha,
                 created_at=datetime.now(UTC),
             )
         )
@@ -153,6 +167,60 @@ def status(path: Path = _REPO_ROOT_ARG) -> None:
     typer.echo(f"Repository: {root}")
     typer.echo(f"Current snapshot: {snapshot_id}")
     typer.echo(f"Nodes: {node_count}, Edges: {edge_count}")
+
+
+@app.command()
+def impact(
+    from_ref: str = typer.Option(..., "--from", help="Git ref to diff from."),
+    to_ref: str = typer.Option("HEAD", "--to", help="Git ref to diff to."),
+    path: Path = _REPO_ROOT_ARG,
+) -> None:
+    """Show what the change between two git refs affects, categorized by confidence."""
+    root = path.resolve()
+    db_path = graph_db_path(root)
+    if not db_path.exists():
+        typer.echo("error: not initialized — run 'repoflare init' first", err=True)
+        raise typer.Exit(code=1)
+
+    with GraphStore(db_path) as store:
+        snapshot_id = store.current_snapshot_id(_repository_id(root))
+        if snapshot_id is None:
+            typer.echo("Initialized, but not yet analyzed — run 'repoflare analyze'.")
+            raise typer.Exit(code=1)
+
+        try:
+            change_set = ChangeDetector(GitAdapter(root)).detect(
+                change_set_id=stable_id(str(root), from_ref, to_ref),
+                snapshot_to_id=snapshot_id,
+                from_ref=from_ref,
+                to_ref=to_ref,
+            )
+        except GitCommandError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+
+        results = ImpactAnalyzer(store, GraphTraversalService(store)).analyze(change_set)
+
+        if not change_set.changed_files:
+            typer.echo(f"No files changed between {from_ref} and {to_ref}.")
+            return
+
+        typer.echo(
+            f"Changed files ({len(change_set.changed_files)}): "
+            f"{', '.join(change_set.changed_files)}"
+        )
+        if not results:
+            typer.echo("No downstream impact found in the graph.")
+            return
+
+        category_order = {c.value: i for i, c in enumerate(type(results[0].category))}
+        for result in sorted(results, key=lambda r: category_order[r.category.value]):
+            typer.echo(f"{result.category.value} ({len(result.affected_node_ids)}):")
+            for node_id in result.affected_node_ids:
+                node = store.get_node(node_id)
+                label = node.qualified_name or node.name if node else node_id
+                location = f" ({node.file_path})" if node and node.file_path else ""
+                typer.echo(f"  {label}{location}")
 
 
 if __name__ == "__main__":

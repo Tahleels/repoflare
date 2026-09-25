@@ -63,23 +63,32 @@ core/
                             Bounded scope deliberately — see resolver.py's module docstring.
     change/                 GitAdapter (safe `git` subprocess wrapper, no shell=True) +
                             ChangeDetector — git diff between two refs -> ChangeSet.
-    cli/                    Typer commands: init, analyze, status (all working end to end;
-                            analyze now also resolves and inserts CALLS/IMPORTS edges)
+    impact/                 ImpactAnalyzer — takes a ChangeSet, resolves changed files to
+                            changed node ids, runs GraphTraversalService.reverse_impact per
+                            changed node, maps depth -> ImpactCategory (1=DIRECT, 2=INDIRECT,
+                            3=RELATED, 4+=POSSIBLE). Excludes the changed nodes themselves
+                            from results.
+    cli/                    Typer commands: init, analyze, status, impact (all working end
+                            to end; analyze resolves+inserts CALLS/IMPORTS edges and records
+                            git_commit_sha on the snapshot when run inside a git repo; impact
+                            diffs two refs via ChangeDetector and prints categorized results
+                            with human-readable node labels, not raw ids)
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    67 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    77 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_graph_store, test_traversal,
-                            test_change_detector, test_cli
+                            test_change_detector, test_impact_analyzer, test_cli
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 67 passed, 1 skipped. `uv run ruff check src tests`
-→ clean. `uv run mypy src` (strict mode) → clean. The CLI was smoke-tested against its own
-source (`uv run repoflare init/analyze/status <path>`) — 19 files, 75 symbols, 11 resolved
-CALLS/IMPORTS edges (modest count is expected given the deliberately bounded resolver scope
-below, not a bug).
+Verified: `cd core && uv sync && uv run pytest -q` → 77 passed, 1 skipped. `uv run ruff check src tests`
+→ clean. `uv run mypy src` (strict mode) → clean. `impact` was smoke-tested in a throwaway
+git repo end-to-end (init -> analyze at commit 1 -> edit + commit 2 -> impact --from commit1)
+and correctly reported both a same-file CALLS-based DIRECT hit and a cross-file
+IMPORTS-based DIRECT hit (cross-file *CALLS* resolution is explicitly out of scope for this
+pass — see item 1 below).
 
-Not started yet: `impact/`, `retrieval/`, `ai/`, `verification/`, `cache/`, `rpc/`, the
-`extension/` (VS Code) TypeScript side, and `export-html` (item 9 below).
+Not started yet: `retrieval/`, `ai/`, `verification/`, `cache/`, `rpc/`, the `extension/`
+(VS Code) TypeScript side, and `export-html` (item 8 below).
 
 ## Conventions in force — match these, don't introduce new patterns
 
@@ -107,50 +116,40 @@ Not started yet: `impact/`, `retrieval/`, `ai/`, `verification/`, `cache/`, `rpc
 
 ## Next up — pick one, each is independently scoped
 
-Items 1 and 2 from the original list (CALLS/IMPORTS resolution, ChangeDetector) are now
-done — see "Current state" above. Renumbered list below starts from what's actually left.
+Items 1 and 2 from the original list (CALLS/IMPORTS resolution, ChangeDetector) and the old
+item 3 (`impact/`) are now done — see "Current state" above. Renumbered list below starts
+from what's actually left.
 
-1. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, if you want more
-   graph density before tackling `impact/`: cross-file call resolution (the callee is
-   imported from elsewhere — needs the IMPORTS edges plus a per-file "what names does this
-   file's imports bring into scope" table), `self.method()` / `obj.method()` attribute
-   calls, and aliased (`import x as y`) / wildcard (`from x import *`) imports. Each of
-   these is independently scoped; don't try to do all of them in one pass. See
-   `parsing/resolver.py`'s module docstring for exactly what's already covered.
+1. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, for more graph
+   density (this directly improves `impact` results — see the smoke-test note above about
+   the cross-file-call gap): cross-file call resolution (the callee is imported from
+   elsewhere — needs the IMPORTS edges plus a per-file "what names does this file's imports
+   bring into scope" table), `self.method()` / `obj.method()` attribute calls, and aliased
+   (`import x as y`) / wildcard (`from x import *`) imports. Each of these is independently
+   scoped; don't try to do all of them in one pass. See `parsing/resolver.py`'s module
+   docstring for exactly what's already covered.
 
-2. **`impact/` — ImpactAnalyzer.** Takes a `ChangeSet`, resolves changed files to changed
-   node ids (via `GraphStore.nodes_for_file`), calls
-   `GraphTraversalService.reverse_impact` per changed node, and maps `min_depth` to
-   `ImpactCategory` (DIRECT=1, INDIRECT=2, RELATED/POSSIBLE=3+ — see
-   `docs/GRAPH_MODEL.md` "Traversal patterns" for the exact mapping this should follow).
-   Produces `ImpactResult` objects.
-
-3. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
+2. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
    doesn't support the content-hash-keyed invalidation from `docs/DATA_MODEL.md`; write a
    small explicit wrapper) plus a `analysis_cache` table read/write path in `GraphStore`. Key
    format: `repository_id + snapshot_id + relevant_node_hashes + question_hash` (see
    `docs/DATA_MODEL.md` access-patterns table).
 
-4. **`ai/` — BobProvider interface.** Define the `BobProvider` protocol/ABC per
+3. **`ai/` — BobProvider interface.** Define the `BobProvider` protocol/ABC per
    `docs/DECISIONS.md` ADR-004, then `GeminiProvider` (free tier) and `OpenRouterProvider`
    (free-tier fallback) implementations, selected via config with a fallback chain. Note the
    naming: this is unrelated to IBM Bob — see ADR-004's note on the naming collision before
    you go looking for an IBM Bob API to call here; there isn't one.
 
-5. ~~**Test coverage + docstrings pass.**~~ Done — 67 tests (was 31), docstrings added to
-   all public methods/classes in `scanning/`, `graph/`, `change/`, and `config/`. Edge cases
-   covered: empty repos, malformed/unparseable source, binary files, symlinks (skipped on
-   Windows), binary-file skip, deep nesting, max_depth=0 CTE bound, empty diff, duplicate
-   inserts, self-imports, module-level call with no enclosing function, and more.
+4. **`rpc/` — JSON-RPC stdio server** — `impact` now exists, so this is unblocked. This is
+   what the VS Code extension will talk to (see `docs/ARCHITECTURE.md` ADR-001 for the
+   protocol choice).
 
-6. **`rpc/` — JSON-RPC stdio server**, once at least `impact` exists — this is what the VS
-   Code extension will talk to (see `docs/ARCHITECTURE.md` ADR-001 for the protocol choice).
-
-7. **`extension/` — VS Code extension shell.** TypeScript client that spawns the core
+5. **`extension/` — VS Code extension shell.** TypeScript client that spawns the core
    subprocess and renders the first panel (repository overview). Depends on `rpc/` existing
    first.
 
-8. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
+6. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
    and renders its graph/impact view as a single static HTML file (no server, no backend at
    demo time). This exists specifically to satisfy the hackathon submission's required
    "Demo Application URL" field: host the exported file for free on GitHub Pages. It does
