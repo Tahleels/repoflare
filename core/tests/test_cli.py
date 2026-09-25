@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from repoflare_core.cli.main import app
@@ -140,6 +141,94 @@ def test_impact_no_changes_reports_none(tmp_path: Path) -> None:
     runner.invoke(app, ["analyze", str(repo)])
 
     result = runner.invoke(app, ["impact", "--from", sha, "--to", sha, str(repo)])
+
+    assert result.exit_code == 0
+    assert "No files changed" in result.output
+
+
+class _StubBobProvider:
+    def complete(self, prompt: str) -> str:
+        return "STUB EXPLANATION"
+
+
+def _commit_two_versions(repo: Path) -> str:
+    """Shared setup for explain tests: commit a.py+b.py, return the first commit's sha,
+    then modify a.py and commit again (leaving the second commit as HEAD)."""
+    (repo / "a.py").write_text("def helper():\n    pass\n")
+    (repo / "b.py").write_text("def entry():\n    helper()\n")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "T")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "first")
+    first_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    (repo / "a.py").write_text("def helper():\n    return 1\n")
+    _git(repo, "commit", "-a", "-q", "-m", "second")
+    return first_sha
+
+
+def test_explain_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("repoflare_core.cli.main.default_bob_provider", lambda: _StubBobProvider())
+    repo = tmp_path
+    first_sha = _commit_two_versions(repo)
+
+    runner.invoke(app, ["init", str(repo)])
+    runner.invoke(app, ["analyze", str(repo)])
+
+    result = runner.invoke(app, ["explain", "--from", first_sha, str(repo)])
+
+    assert result.exit_code == 0, result.output
+    assert "STUB EXPLANATION" in result.output
+
+
+def test_explain_no_provider_configured_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for var in ("GEMINI_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    repo = tmp_path
+    first_sha = _commit_two_versions(repo)
+
+    runner.invoke(app, ["init", str(repo)])
+    runner.invoke(app, ["analyze", str(repo)])
+
+    result = runner.invoke(app, ["explain", "--from", first_sha, str(repo)])
+
+    assert result.exit_code == 1
+
+
+def test_explain_before_analyze_errors(tmp_path: Path) -> None:
+    runner.invoke(app, ["init", str(tmp_path)])
+
+    result = runner.invoke(app, ["explain", "--from", "HEAD~1", str(tmp_path)])
+
+    assert result.exit_code == 1
+
+
+def test_explain_before_init_errors(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["explain", "--from", "HEAD~1", str(tmp_path)])
+    assert result.exit_code == 1
+
+
+def test_explain_no_changes_reports_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("repoflare_core.cli.main.default_bob_provider", lambda: _StubBobProvider())
+    repo = tmp_path
+    (repo / "a.py").write_text("def f():\n    pass\n")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "T")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "first")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    runner.invoke(app, ["init", str(repo)])
+    runner.invoke(app, ["analyze", str(repo)])
+
+    result = runner.invoke(app, ["explain", "--from", sha, "--to", sha, str(repo)])
 
     assert result.exit_code == 0
     assert "No files changed" in result.output

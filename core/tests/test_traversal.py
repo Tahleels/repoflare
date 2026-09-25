@@ -105,6 +105,36 @@ def test_reverse_impact_leaf_node_returns_empty(tmp_path: Path) -> None:
     assert hops == []
 
 
+def test_shortest_reverse_path_reconstructs_chain(tmp_path: Path) -> None:
+    with _build_chain(tmp_path) as store:
+        traversal = GraphTraversalService(store)
+
+        assert traversal.shortest_reverse_path("snap1", "a", "b") == ["a", "b"]
+        assert traversal.shortest_reverse_path("snap1", "a", "c") == ["a", "b", "c"]
+
+
+def test_shortest_reverse_path_same_node_is_trivial(tmp_path: Path) -> None:
+    with _build_chain(tmp_path) as store:
+        traversal = GraphTraversalService(store)
+
+        assert traversal.shortest_reverse_path("snap1", "a", "a") == ["a"]
+
+
+def test_shortest_reverse_path_unreachable_returns_none(tmp_path: Path) -> None:
+    with _build_chain(tmp_path) as store:
+        traversal = GraphTraversalService(store)
+
+        # c has no dependents in the chain, so nothing is reachable from c
+        assert traversal.shortest_reverse_path("snap1", "c", "a") is None
+
+
+def test_shortest_reverse_path_respects_max_depth(tmp_path: Path) -> None:
+    with _build_chain(tmp_path) as store:
+        traversal = GraphTraversalService(store)
+
+        assert traversal.shortest_reverse_path("snap1", "a", "c", max_depth=1) is None
+
+
 def test_reverse_impact_very_deep_chain_bounded_by_max_depth(tmp_path: Path) -> None:
     """A chain longer than max_depth must be cut off at max_depth hops."""
     store = GraphStore(tmp_path / "graph.duckdb")

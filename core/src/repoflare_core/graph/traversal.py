@@ -51,6 +51,55 @@ class GraphTraversalService:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def shortest_reverse_path(
+        self,
+        snapshot_id: str,
+        from_node_id: str,
+        to_node_id: str,
+        max_depth: int = DEFAULT_MAX_DEPTH,
+    ) -> list[str] | None:
+        """Reconstruct one shortest reverse-dependency path from `from_node_id` back to
+        `to_node_id` (inclusive of both ends), or None if unreachable within max_depth.
+
+        BFS in Python rather than a single recursive-CTE query — reverse_impact already
+        answers "is X reachable and how far," which is what ImpactAnalyzer needs; this
+        method exists separately for retrieval/ContextRetriever, which needs the actual
+        path (for AIContextPackage.graph_paths), not just the distance. Each BFS layer is
+        still one indexed query via direct_dependents, so it stays bounded and cheap for
+        the max_depth this product uses (see DEFAULT_MAX_DEPTH).
+        """
+        if from_node_id == to_node_id:
+            return [from_node_id]
+
+        predecessor: dict[str, str] = {}
+        frontier = [from_node_id]
+        visited = {from_node_id}
+        for _depth in range(max_depth):
+            next_frontier: list[str] = []
+            for node_id in frontier:
+                for dependent in self.direct_dependents(snapshot_id, node_id):
+                    if dependent in visited:
+                        continue
+                    visited.add(dependent)
+                    predecessor[dependent] = node_id
+                    if dependent == to_node_id:
+                        return self._reconstruct_path(predecessor, from_node_id, to_node_id)
+                    next_frontier.append(dependent)
+            frontier = next_frontier
+            if not frontier:
+                break
+        return None
+
+    @staticmethod
+    def _reconstruct_path(
+        predecessor: dict[str, str], from_node_id: str, to_node_id: str
+    ) -> list[str]:
+        path = [to_node_id]
+        while path[-1] != from_node_id:
+            path.append(predecessor[path[-1]])
+        path.reverse()
+        return path
+
     def reverse_impact(
         self, snapshot_id: str, node_id: str, max_depth: int = DEFAULT_MAX_DEPTH
     ) -> list[ImpactHop]:
