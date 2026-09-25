@@ -73,22 +73,35 @@ core/
                             git_commit_sha on the snapshot when run inside a git repo; impact
                             diffs two refs via ChangeDetector and prints categorized results
                             with human-readable node labels, not raw ids)
+    ai/                     BobProvider (Protocol, provider.py) + GeminiProvider (primary,
+                            free tier — endpoint/schema verified 2026-09-26 against
+                            ai.google.dev) + OpenRouterProvider (fallback — no hardcoded
+                            default model, since free models "rotate out without warning"
+                            per OpenRouter's own docs; pass one via config) +
+                            FallbackBobProvider (tries providers in order) +
+                            default_bob_provider() factory (reads GEMINI_API_KEY /
+                            OPENROUTER_API_KEY+OPENROUTER_MODEL from env — see .env.example).
+                            All HTTP tested via httpx.MockTransport — no real network calls
+                            in the test suite.
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    77 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    92 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_graph_store, test_traversal,
-                            test_change_detector, test_impact_analyzer, test_cli
+                            test_change_detector, test_impact_analyzer, test_ai_providers,
+                            test_ai_factory, test_cli
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 77 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 92 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run mypy src` (strict mode) → clean. `impact` was smoke-tested in a throwaway
 git repo end-to-end (init -> analyze at commit 1 -> edit + commit 2 -> impact --from commit1)
 and correctly reported both a same-file CALLS-based DIRECT hit and a cross-file
 IMPORTS-based DIRECT hit (cross-file *CALLS* resolution is explicitly out of scope for this
-pass — see item 1 below).
+pass — see item 1 below). `ai/` has not been smoke-tested against a real Gemini/OpenRouter
+key yet (no key available in this session) — only via mocked HTTP; do that before relying on
+it for a live demo.
 
-Not started yet: `retrieval/`, `ai/`, `verification/`, `cache/`, `rpc/`, the `extension/`
-(VS Code) TypeScript side, and `export-html` (item 8 below).
+Not started yet: `retrieval/`, `verification/`, `cache/`, `rpc/`, the `extension/` (VS Code)
+TypeScript side, and `export-html` (item 5 below).
 
 ## Conventions in force — match these, don't introduce new patterns
 
@@ -116,11 +129,19 @@ Not started yet: `retrieval/`, `ai/`, `verification/`, `cache/`, `rpc/`, the `ex
 
 ## Next up — pick one, each is independently scoped
 
-Items 1 and 2 from the original list (CALLS/IMPORTS resolution, ChangeDetector) and the old
-item 3 (`impact/`) are now done — see "Current state" above. Renumbered list below starts
-from what's actually left.
+CALLS/IMPORTS resolution, ChangeDetector, `impact/`, and `ai/` are now done — see "Current
+state" above. Renumbered list below starts from what's actually left.
 
-1. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, for more graph
+1. **Wire `ai/` up to something real.** The provider layer exists and is tested against
+   mocked HTTP, but nothing in the CLI calls it yet, and it's never been smoke-tested against
+   a live key. Two independent pieces of value here: (a) get a real `GEMINI_API_KEY` and run
+   `default_bob_provider().complete("...")` once by hand to confirm the verified-2026-09-26
+   request/response shapes still hold; (b) start `retrieval/` — a `ContextRetriever` that
+   builds an `AIContextPackage` (already defined in `domain/entities.py`) from an
+   `ImpactResult`, which is the missing piece between "impact analysis" and "ask Bob to
+   explain it."
+
+2. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, for more graph
    density (this directly improves `impact` results — see the smoke-test note above about
    the cross-file-call gap): cross-file call resolution (the callee is imported from
    elsewhere — needs the IMPORTS edges plus a per-file "what names does this file's imports
@@ -129,17 +150,12 @@ from what's actually left.
    scoped; don't try to do all of them in one pass. See `parsing/resolver.py`'s module
    docstring for exactly what's already covered.
 
-2. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
+3. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
    doesn't support the content-hash-keyed invalidation from `docs/DATA_MODEL.md`; write a
    small explicit wrapper) plus a `analysis_cache` table read/write path in `GraphStore`. Key
    format: `repository_id + snapshot_id + relevant_node_hashes + question_hash` (see
-   `docs/DATA_MODEL.md` access-patterns table).
-
-3. **`ai/` — BobProvider interface.** Define the `BobProvider` protocol/ABC per
-   `docs/DECISIONS.md` ADR-004, then `GeminiProvider` (free tier) and `OpenRouterProvider`
-   (free-tier fallback) implementations, selected via config with a fallback chain. Note the
-   naming: this is unrelated to IBM Bob — see ADR-004's note on the naming collision before
-   you go looking for an IBM Bob API to call here; there isn't one.
+   `docs/DATA_MODEL.md` access-patterns table). Worth doing once `ai/` is actually being
+   called, since that's the expensive operation worth caching.
 
 4. **`rpc/` — JSON-RPC stdio server** — `impact` now exists, so this is unblocked. This is
    what the VS Code extension will talk to (see `docs/ARCHITECTURE.md` ADR-001 for the
