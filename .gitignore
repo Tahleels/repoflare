@@ -1,0 +1,65 @@
+# RepoFlare's own analysis state (per-repository, never committed)
+.repoflare/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / VS Code extension
+node_modules/
+out/
+*.vsix
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+
+# ============================================
+# CREDENTIALS AND SECRETS (CRITICAL)
+# Source patterns: https://github.com/watsonxhackathon/ibm-hackathon-template
+# ============================================
+.env
+.env.*
+!.env.example
+*.env
+env.local
+.env.local
+.env.*.local
+ibmcloud-credentials.json
+ibm-credentials.env
+*-credentials.json
+*apikey*
+*api-key*
+*api_key*
+config.json
+config.yaml
+config.yml
+secrets.json
+secrets.yaml
+secrets.yml
+credentials.json
+credentials.yaml
+*credentials*
+*secret*
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+id_rsa
+id_dsa
+*.ppk
+
+# IBM Bob session exports go IN the repo intentionally (bob_sessions/) — do not ignore them.
+# Live AI-assistant session/config dirs from OTHER tools are excluded (not ours).
+.copilot/
+.cursor/
+.codeium/
