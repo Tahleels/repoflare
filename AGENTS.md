@@ -18,7 +18,7 @@ architecture from scratch.
   already account for.
 - Submission also needs: a 500-word Problem & Solution statement, a 500-word IBM Bob Usage
   Statement (be specific about what Bob did), a ≤3-minute video (≥90s must show the solution
-  running), a slide PDF, and a **live Demo Application URL** — see item 9 below for how we're
+  running), a slide PDF, and a **live Demo Application URL** — see item 5 in "Next up" below for how we're
   satisfying that last one without turning RepoFlare into a web app.
 - Judging criteria (unweighted, no published point values): Application of Technology,
   Presentation, Business Value, Originality — all four explicitly reference "clear
@@ -51,79 +51,79 @@ core/
     domain/                Frozen dataclasses: Node, Edge, Repository, Snapshot, etc.
                             (entities.py), deterministic id hashing (ids.py)
     graph/                 GraphStore (DuckDB persistence: schema.py + store.py) and
-                            GraphTraversalService (traversal.py: direct_dependents,
-                            bounded reverse_impact via recursive CTE)
+                            GraphTraversalService (traversal.py): direct_dependents,
+                            bounded reverse_impact (recursive CTE), shortest_reverse_path
+                            (BFS path reconstruction, used by retrieval/)
     scanning/               RepositoryScanner — walks a repo, respects .gitignore,
                             filters to known languages (python, typescript, javascript)
     parsing/                ParserAdapter — tree-sitter extraction of functions/classes/
-                            methods + CONTAINS edges, for Python and TypeScript/JS.
-                            CallImportResolver (resolver.py) — second pass, resolves
-                            CALLS (same-file, module-level function calls only) and
-                            IMPORTS (File->File, by module-qualified-name match) edges.
-                            Bounded scope deliberately — see resolver.py's module docstring.
+                            methods + CONTAINS edges (Python, TypeScript/JS), and pytest-
+                            style test detection (module-level `def test_*` inside
+                            test_*.py/*_test.py -> NodeKind.TEST, Python-only).
+                            CallImportResolver (resolver.py) — second pass: same-file
+                            module-level CALLS + File->File IMPORTS by module-qualified-
+                            name match. Deliberately bounded — see its module docstring.
+                            TestLinkResolver (test_resolver.py) — second pass: TESTED_BY
+                            edges linking `test_foo` to any symbol named `foo` anywhere in
+                            the snapshot (naming heuristic, not coverage analysis).
     change/                 GitAdapter (safe `git` subprocess wrapper, no shell=True) +
                             ChangeDetector — git diff between two refs -> ChangeSet.
-    impact/                 ImpactAnalyzer — takes a ChangeSet, resolves changed files to
-                            changed node ids, runs GraphTraversalService.reverse_impact per
-                            changed node, maps depth -> ImpactCategory (1=DIRECT, 2=INDIRECT,
-                            3=RELATED, 4+=POSSIBLE). Excludes the changed nodes themselves
-                            from results.
-    cli/                    Typer commands: init, analyze, status, impact (all working end
-                            to end; analyze resolves+inserts CALLS/IMPORTS edges and records
-                            git_commit_sha on the snapshot when run inside a git repo; impact
-                            diffs two refs via ChangeDetector and prints categorized results
-                            with human-readable node labels, not raw ids)
+    impact/                 ImpactAnalyzer — ChangeSet -> categorized ImpactResults via
+                            GraphTraversalService.reverse_impact (depth 1=DIRECT,
+                            2=INDIRECT, 3=RELATED, 4+=POSSIBLE). Excludes changed nodes
+                            themselves from results.
     ai/                     BobProvider (Protocol, provider.py) + GeminiProvider (primary,
                             free tier — endpoint/schema verified 2026-09-26 against
-                            ai.google.dev) + OpenRouterProvider (fallback — no hardcoded
-                            default model, since free models "rotate out without warning"
-                            per OpenRouter's own docs; pass one via config) +
-                            FallbackBobProvider (tries providers in order) +
-                            default_bob_provider() factory (reads GEMINI_API_KEY /
-                            OPENROUTER_API_KEY+OPENROUTER_MODEL from env — see .env.example).
-                            All HTTP tested via httpx.MockTransport — no real network calls
-                            in the test suite; not yet smoke-tested against a live key.
+                            ai.google.dev, live-smoke-tested working) + OpenRouterProvider
+                            (fallback — defaults to and *hard-enforces* OpenRouter's
+                            official `openrouter/free` router; constructor raises
+                            NotAFreeModelError for anything that isn't `openrouter/free` or
+                            doesn't end in `:free`, so a paid model can never slip through)
+                            + FallbackBobProvider (tries providers in order) +
+                            default_bob_provider() factory (reads GEMINI_API_KEY and/or
+                            OPENROUTER_API_KEY[+optional OPENROUTER_MODEL] from env — see
+                            .env.example). HTTP tested via httpx.MockTransport.
     retrieval/              ContextRetriever (context_retriever.py) — builds a bounded
                             AIContextPackage from a ChangeSet + ImpactResults: source
-                            snippets (read from disk via node file_path/start_line/end_line,
-                            capped at 10 nodes), reconstructed graph paths (via
-                            GraphTraversalService.shortest_reverse_path, new this session),
-                            direct dependents. `relevant_tests` is always empty — no test
-                            discovery exists yet (see item 2). format_explain_prompt
-                            (prompt.py) turns that package into an LLM-ready prompt string.
-    cli/                    Typer commands: init, analyze, status, impact, explain (all
-                            working end to end). `explain` runs the full pipeline: git diff
-                            -> ChangeDetector -> ImpactAnalyzer -> ContextRetriever ->
+                            snippets (read from disk, capped at 10 nodes), reconstructed
+                            graph paths, direct dependents, and relevant_tests (via
+                            TESTED_BY edges — empty only when no matching test exists/was
+                            detected, not a gap). format_explain_prompt (prompt.py) turns
+                            that package into an LLM-ready prompt string.
+    cli/                    Typer commands: init, analyze, status, impact, explain — all
+                            working end to end. `analyze` resolves+inserts CALLS/IMPORTS
+                            and TESTED_BY edges, records git_commit_sha when run inside a
+                            git repo. `impact` diffs two refs and prints categorized,
+                            human-readable results. `explain` runs the full pipeline (git
+                            diff -> ChangeDetector -> ImpactAnalyzer -> ContextRetriever ->
                             format_explain_prompt -> default_bob_provider().complete() ->
-                            printed explanation. Fails cleanly (exit 1, clear message) with
-                            no provider configured — verified by smoke test.
+                            printed explanation), failing cleanly with no provider
+                            configured. stdout/stderr forced to UTF-8 at startup (AI text
+                            has em-dashes/curly quotes that corrupted default Windows
+                            console output before this fix).
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    109 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    122 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
-                            test_call_import_resolver, test_graph_store, test_traversal,
-                            test_change_detector, test_impact_analyzer, test_ai_providers,
-                            test_ai_factory, test_context_retriever, test_cli
+                            test_call_import_resolver, test_test_resolver, test_graph_store,
+                            test_traversal, test_change_detector, test_impact_analyzer,
+                            test_ai_providers, test_ai_factory, test_context_retriever,
+                            test_cli
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 109 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 122 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
-smoke-tested end-to-end in throwaway git repos, INCLUDING against a real, live
-`GEMINI_API_KEY` — `repoflare explain --from <ref>` genuinely calls Gemini and prints a
-real explanation. `explain` with no provider configured correctly exits 1 with a clear
-message.
-
-`ai/openrouter.py::OpenRouterProvider` now defaults to and strictly enforces OpenRouter's
-official `openrouter/free` router (announced 2026-02-01 — see
-https://openrouter.ai/docs/guides/routing/routers/free-router) — the constructor raises
-`NotAFreeModelError` for any model id that isn't `openrouter/free` or doesn't end in
-`:free`, so this integration can never silently call a paid OpenRouter model.
-
-CLI stdout/stderr are forced to UTF-8 with `errors="replace"` at startup — AI-generated
-text routinely has em-dashes/curly quotes that corrupted output on a default Windows
-console codepage before this fix; verified fixed via the live smoke test above.
+smoke-tested end-to-end in throwaway git repos, INCLUDING `explain` against a real, live
+`GEMINI_API_KEY` — genuinely calls Gemini and prints a real explanation; encoding fix
+verified to eliminate the corruption that was present before it. Test discovery was
+smoke-tested against this repo's own `core/` tree: correctly found 90 real test functions
+and 0 false positives; 0 TESTED_BY links there specifically because this project's own test
+names are descriptive (`test_scan_finds_known_language_files`) rather than the bare
+`test_<exact_function_name>` pattern the heuristic matches — the dedicated CLI test
+(`test_analyze_discovers_tests_and_links_them`) proves the link actually forms when naming
+does match.
 
 Not started yet: `verification/`, `cache/`, `rpc/`, the `extension/` (VS Code) TypeScript
-side, and `export-html` (item 6 below).
+side, and `export-html` (item 5 below — renumbered, see "Next up").
 
 ## Conventions in force — match these, don't introduce new patterns
 
@@ -151,17 +151,12 @@ side, and `export-html` (item 6 below).
 
 ## Next up — pick one, each is independently scoped
 
-CALLS/IMPORTS resolution, ChangeDetector, `impact/`, `ai/`, and `retrieval/` (+ the
-`explain` CLI command tying them together) are now done — see "Current state" above.
-Renumbered list below starts from what's actually left.
+CALLS/IMPORTS resolution, ChangeDetector, `impact/`, `ai/`, `retrieval/` (+ the `explain`
+CLI command tying them together), and test discovery (`NodeKind.TEST` +
+`TESTED_BY`) are now done — see "Current state" above. Renumbered list below starts from
+what's actually left.
 
-1. **Test discovery**, to make `retrieval/`'s `relevant_tests` field actually populate
-   (currently always `[]` — see `retrieval/context_retriever.py`'s module docstring). Needs:
-   detecting test files/functions during parsing (populate `NodeKind.TEST` nodes — nothing
-   does this yet) and a `TESTED_BY` edge from symbol to test, likely via naming-convention
-   heuristics (`test_foo` -> `foo`) as a first pass, not full coverage analysis.
-
-2. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, for more graph
+1. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, for more graph
    density (this directly improves `impact`/`explain` results — see the impact smoke-test
    note above about the cross-file-call gap): cross-file call resolution (the callee is
    imported from elsewhere — needs the IMPORTS edges plus a per-file "what names does this
@@ -170,22 +165,22 @@ Renumbered list below starts from what's actually left.
    these is independently scoped; don't try to do all of them in one pass. See
    `parsing/resolver.py`'s module docstring for exactly what's already covered.
 
-3. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
+2. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
    doesn't support the content-hash-keyed invalidation from `docs/DATA_MODEL.md`; write a
    small explicit wrapper) plus a `analysis_cache` table read/write path in `GraphStore`. Key
    format: `repository_id + snapshot_id + relevant_node_hashes + question_hash` (see
    `docs/DATA_MODEL.md` access-patterns table). `explain` is the expensive operation worth
    caching now that it exists — cache on `(change_set_id, context_id)`.
 
-4. **`rpc/` — JSON-RPC stdio server** — `impact`/`explain` now exist, so this is unblocked.
+3. **`rpc/` — JSON-RPC stdio server** — `impact`/`explain` now exist, so this is unblocked.
    This is what the VS Code extension will talk to (see `docs/ARCHITECTURE.md` ADR-001 for
    the protocol choice).
 
-5. **`extension/` — VS Code extension shell.** TypeScript client that spawns the core
+4. **`extension/` — VS Code extension shell.** TypeScript client that spawns the core
    subprocess and renders the first panel (repository overview). Depends on `rpc/` existing
    first.
 
-6. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
+5. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
    and renders its graph/impact view as a single static HTML file (no server, no backend at
    demo time). This exists specifically to satisfy the hackathon submission's required
    "Demo Application URL" field: host the exported file for free on GitHub Pages. It does

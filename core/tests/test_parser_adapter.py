@@ -141,6 +141,62 @@ def test_module_qualified_name_strips_extension_and_converts_slashes() -> None:
     assert module_qualified_name("a/b/c.tsx") == "a.b.c"
 
 
+def test_test_function_in_test_file_becomes_test_node() -> None:
+    source = "def test_helper():\n    assert True\n"
+    file = _scanned_file("tests/test_widget.py", "python", source)
+
+    result = ParserAdapter().parse(file, SNAPSHOT_ID)
+
+    test_nodes = [n for n in result.nodes if n.kind == NodeKind.TEST]
+    assert len(test_nodes) == 1
+    assert test_nodes[0].name == "test_helper"
+    assert test_nodes[0].properties["framework"] == "pytest"
+    assert not any(n.kind == NodeKind.SYMBOL for n in result.nodes)
+
+
+def test_test_suffix_file_naming_also_recognised() -> None:
+    source = "def test_helper():\n    assert True\n"
+    file = _scanned_file("widget_test.py", "python", source)
+
+    result = ParserAdapter().parse(file, SNAPSHOT_ID)
+
+    assert any(n.kind == NodeKind.TEST for n in result.nodes)
+
+
+def test_function_not_prefixed_test_in_test_file_stays_a_symbol() -> None:
+    source = "def helper():\n    pass\n\ndef test_uses_helper():\n    helper()\n"
+    file = _scanned_file("tests/test_widget.py", "python", source)
+
+    result = ParserAdapter().parse(file, SNAPSHOT_ID)
+
+    kinds = {n.name: n.kind for n in result.nodes}
+    assert kinds["helper"] == NodeKind.SYMBOL
+    assert kinds["test_uses_helper"] == NodeKind.TEST
+
+
+def test_test_prefixed_function_outside_test_file_stays_a_symbol() -> None:
+    """A function named test_foo in a normal (non-test-named) file is not pytest-discoverable
+    (doesn't match python_files), so it must not be misclassified as a test."""
+    source = "def test_something():\n    pass\n"
+    file = _scanned_file("widget.py", "python", source)
+
+    result = ParserAdapter().parse(file, SNAPSHOT_ID)
+
+    assert not any(n.kind == NodeKind.TEST for n in result.nodes)
+    assert any(n.kind == NodeKind.SYMBOL and n.name == "test_something" for n in result.nodes)
+
+
+def test_method_named_test_something_is_not_reclassified() -> None:
+    """Only module-level functions are considered for test detection this pass — a method
+    inside a class is out of scope (see parsing/adapter.py's module docstring)."""
+    source = "class Foo:\n    def test_bar(self):\n        pass\n"
+    file = _scanned_file("tests/test_widget.py", "python", source)
+
+    result = ParserAdapter().parse(file, SNAPSHOT_ID)
+
+    assert not any(n.kind == NodeKind.TEST for n in result.nodes)
+
+
 def test_file_node_qualified_name_matches_module_qualified_name() -> None:
     from repoflare_core.parsing.adapter import module_qualified_name
 

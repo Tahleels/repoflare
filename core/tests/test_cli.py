@@ -22,8 +22,8 @@ def test_init_analyze_status_end_to_end(tmp_path: Path) -> None:
     analyze_result = runner.invoke(app, ["analyze", str(tmp_path)])
     assert analyze_result.exit_code == 0, analyze_result.output
     assert (
-        "Analyzed 1 files, extracted 2 symbols, resolved 1 CALLS/IMPORTS edges."
-        in analyze_result.output
+        "Analyzed 1 files, extracted 2 symbols (0 tests), resolved 1 CALLS/IMPORTS edges "
+        "and 0 TESTED_BY edges." in analyze_result.output
     )
 
     status_result = runner.invoke(app, ["status", str(tmp_path)])
@@ -232,3 +232,15 @@ def test_explain_no_changes_reports_none(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert result.exit_code == 0
     assert "No files changed" in result.output
+
+
+def test_analyze_discovers_tests_and_links_them(tmp_path: Path) -> None:
+    (tmp_path / "widget.py").write_text("def helper():\n    pass\n")
+    (tmp_path / "test_widget.py").write_text("def test_helper():\n    assert True\n")
+
+    runner.invoke(app, ["init", str(tmp_path)])
+    result = runner.invoke(app, ["analyze", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "(1 tests)" in result.output
+    assert "1 TESTED_BY edges" in result.output

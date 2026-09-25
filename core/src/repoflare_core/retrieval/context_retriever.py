@@ -3,9 +3,10 @@ the targeted slice of the repository handed to a BobProvider, never the whole re
 docs/ARCHITECTURE.md §3 and CLAUDE_CODE_MASTER_PROMPT.md §10: "never send the entire
 repository to an LLM for every change").
 
-Scope note: `relevant_tests` is always empty in this pass — nothing in the pipeline yet
-populates NodeKind.TEST nodes (test discovery isn't built), so there's nothing correct to
-report here rather than a placeholder. See AGENTS.md "Next up".
+`relevant_tests` is populated via TESTED_BY edges (see parsing/test_resolver.py) for the
+changed and directly-dependent nodes — a naming-convention heuristic, not real coverage
+analysis. It stays empty for nodes with no matching TESTED_BY edge, which is correct (not a
+gap) when no such test exists or was detected.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pathlib import Path
 from repoflare_core.domain.entities import (
     AIContextPackage,
     ChangeSet,
+    EdgeType,
     ImpactCategory,
     ImpactResult,
     Node,
@@ -48,6 +50,9 @@ class ContextRetriever:
 
         snippet_candidates = (changed_node_ids + direct_dependent_ids)[:_MAX_SNIPPET_NODES]
         snippets = self._snippets(snippet_candidates, repository_root)
+        relevant_tests = self._relevant_tests(
+            change_set.snapshot_to_id, changed_node_ids + direct_dependent_ids
+        )
 
         return AIContextPackage(
             context_id=stable_id(change_set.change_set_id, "context"),
@@ -55,7 +60,7 @@ class ContextRetriever:
             snippets=snippets,
             graph_paths=graph_paths,
             direct_dependents=direct_dependent_ids,
-            relevant_tests=[],
+            relevant_tests=relevant_tests,
         )
 
     def _changed_node_ids(self, change_set: ChangeSet) -> set[str]:
@@ -84,6 +89,16 @@ class ContextRetriever:
                     paths.append(path)
                     break
         return paths
+
+    def _relevant_tests(self, snapshot_id: str, node_ids: list[str]) -> list[str]:
+        test_ids: set[str] = set()
+        for node_id in node_ids:
+            test_ids.update(
+                self._traversal.direct_dependents(
+                    snapshot_id, node_id, edge_type=EdgeType.TESTED_BY
+                )
+            )
+        return sorted(test_ids)
 
     def _snippets(self, node_ids: list[str], repository_root: Path) -> dict[str, str]:
         # Keyed by file path (per AIContextPackage.snippets' contract), so two symbols from

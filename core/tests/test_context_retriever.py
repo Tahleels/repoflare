@@ -147,7 +147,7 @@ def test_context_id_is_deterministic(tmp_path: Path) -> None:
     assert first.context_id == second.context_id
 
 
-def test_relevant_tests_is_always_empty_no_test_discovery_yet(tmp_path: Path) -> None:
+def test_relevant_tests_empty_when_no_tested_by_edge_exists(tmp_path: Path) -> None:
     with _build_store(tmp_path) as store:
         retriever = ContextRetriever(store, GraphTraversalService(store))
         change_set = ChangeSet(change_set_id="cs1", snapshot_to_id=SNAPSHOT_ID, changed_files=[])
@@ -155,3 +155,31 @@ def test_relevant_tests_is_always_empty_no_test_discovery_yet(tmp_path: Path) ->
         context = retriever.build_context(change_set, [], tmp_path)
 
     assert context.relevant_tests == []
+
+
+def test_relevant_tests_populated_from_tested_by_edges(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def helper():\n    pass\n")
+
+    with _build_store(tmp_path) as store:
+        store.insert_nodes(
+            [Node(node_id="t1", snapshot_id=SNAPSHOT_ID, kind=NodeKind.TEST, name="test_helper")]
+        )
+        store.insert_edges(
+            [
+                Edge(
+                    edge_id="e_tested",
+                    snapshot_id=SNAPSHOT_ID,
+                    src_node_id="t1",
+                    dst_node_id="a_helper",
+                    edge_type=EdgeType.TESTED_BY,
+                )
+            ]
+        )
+        retriever = ContextRetriever(store, GraphTraversalService(store))
+        change_set = ChangeSet(
+            change_set_id="cs1", snapshot_to_id=SNAPSHOT_ID, changed_files=["a.py"]
+        )
+
+        context = retriever.build_context(change_set, [], tmp_path)
+
+    assert context.relevant_tests == ["t1"]

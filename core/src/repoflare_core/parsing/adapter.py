@@ -1,9 +1,17 @@
 """ParserAdapter: wraps tree-sitter to extract structural symbols (functions/classes/
 methods) and CONTAINS edges from a single file's source text.
 
+Also detects pytest-style test functions (a module-level `def test_*` inside a
+`test_*.py`/`*_test.py` file — pytest's own default `python_files`/`python_functions`
+discovery patterns) and emits them as NodeKind.TEST rather than NodeKind.SYMBOL. Linking a
+test to the symbol it tests (TESTED_BY edges) is a separate concern — see
+parsing/test_resolver.py, which needs a snapshot-wide view this single-file pass doesn't
+have.
+
 Scope note: cross-file resolution (CALLS edges to symbols in other files, resolved IMPORTS
 targets) is intentionally not implemented here — see AGENTS.md "Next up" for why that's a
-separate, well-scoped task rather than something to bolt on half-finished.
+separate, well-scoped task rather than something to bolt on half-finished. Test detection is
+Python-only and function-only (no TestCase-style class methods) for the same reason.
 """
 
 from __future__ import annotations
@@ -42,6 +50,12 @@ def module_qualified_name(relative_path: str) -> str:
     key the snapshot-wide module lookup) — both must agree on this mapping or import/call
     resolution silently fails to match, so it lives in one place."""
     return relative_path.rsplit(".", 1)[0].replace("/", ".")
+
+
+def _is_pytest_test_file(relative_path: str) -> bool:
+    """Matches pytest's default `python_files` discovery pattern: test_*.py or *_test.py."""
+    base = relative_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return base.startswith("test_") or base.endswith("_test")
 
 
 class ParserAdapter:
@@ -98,17 +112,22 @@ class ParserAdapter:
     ) -> None:
         for child in ts_node.children:
             if child.type == "function_definition":
-                self._emit_symbol(
-                    child,
-                    file,
-                    snapshot_id,
-                    module_qname,
-                    file_node_id,
-                    parent,
-                    SymbolKind.METHOD if parent else SymbolKind.FUNCTION,
-                    nodes,
-                    edges,
-                )
+                if parent is None and self._is_pytest_test_function(child, file):
+                    self._emit_test(
+                        child, file, snapshot_id, module_qname, file_node_id, nodes, edges
+                    )
+                else:
+                    self._emit_symbol(
+                        child,
+                        file,
+                        snapshot_id,
+                        module_qname,
+                        file_node_id,
+                        parent,
+                        SymbolKind.METHOD if parent else SymbolKind.FUNCTION,
+                        nodes,
+                        edges,
+                    )
             elif child.type == "class_definition":
                 symbol = self._emit_symbol(
                     child,
@@ -190,6 +209,59 @@ class ParserAdapter:
                 self._walk_typescript(
                     child, file, snapshot_id, module_qname, file_node_id, parent, nodes, edges
                 )
+
+    # -- test detection -------------------------------------------------------------
+
+    @staticmethod
+    def _is_pytest_test_function(ts_node: TSNode, file: ScannedFile) -> bool:
+        if not _is_pytest_test_file(file.relative_path):
+            return False
+        name_node = ts_node.child_by_field_name("name")
+        if name_node is None:
+            return False
+        name = file.content[name_node.start_byte : name_node.end_byte]
+        return name.startswith("test_")
+
+    @staticmethod
+    def _emit_test(
+        ts_node: TSNode,
+        file: ScannedFile,
+        snapshot_id: str,
+        module_qname: str,
+        file_node_id: str,
+        nodes: list[Node],
+        edges: list[Edge],
+    ) -> None:
+        name_node = ts_node.child_by_field_name("name")
+        if name_node is None:
+            return
+        name = file.content[name_node.start_byte : name_node.end_byte]
+        qualified_name = f"{module_qname}.{name}"
+        node_id = stable_id(snapshot_id, "TEST", qualified_name)
+
+        nodes.append(
+            Node(
+                node_id=node_id,
+                snapshot_id=snapshot_id,
+                kind=NodeKind.TEST,
+                name=name,
+                qualified_name=qualified_name,
+                file_path=file.relative_path,
+                start_line=ts_node.start_point[0] + 1,
+                end_line=ts_node.end_point[0] + 1,
+                content_hash=stable_id(file.content[ts_node.start_byte : ts_node.end_byte]),
+                properties={"framework": "pytest"},
+            )
+        )
+        edges.append(
+            Edge(
+                edge_id=stable_id(snapshot_id, "CONTAINS", file_node_id, node_id),
+                snapshot_id=snapshot_id,
+                src_node_id=file_node_id,
+                dst_node_id=node_id,
+                edge_type=EdgeType.CONTAINS,
+            )
+        )
 
     # -- shared -------------------------------------------------------------------
 

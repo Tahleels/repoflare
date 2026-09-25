@@ -26,6 +26,7 @@ from repoflare_core.graph.traversal import GraphTraversalService
 from repoflare_core.impact.analyzer import ImpactAnalyzer
 from repoflare_core.parsing.adapter import ParserAdapter, module_qualified_name
 from repoflare_core.parsing.resolver import CallImportResolver
+from repoflare_core.parsing.test_resolver import TestLinkResolver
 from repoflare_core.retrieval.context_retriever import ContextRetriever
 from repoflare_core.retrieval.prompt import format_explain_prompt
 from repoflare_core.scanning.scanner import RepositoryScanner
@@ -124,6 +125,7 @@ def analyze(path: Path = _REPO_ROOT_ARG) -> None:
     }
 
     symbol_count = 0
+    test_count = 0
     resolved_edge_count = 0
     with GraphStore(db_path) as store:
         store.create_snapshot(
@@ -139,6 +141,7 @@ def analyze(path: Path = _REPO_ROOT_ARG) -> None:
             store.insert_nodes(result.nodes)
             store.insert_edges(result.edges)
             symbol_count += sum(1 for n in result.nodes if n.kind == NodeKind.SYMBOL)
+            test_count += sum(1 for n in result.nodes if n.kind == NodeKind.TEST)
 
         for scanned_file, _result in parsed:
             module_qname = module_qualified_name(scanned_file.relative_path)
@@ -152,9 +155,14 @@ def analyze(path: Path = _REPO_ROOT_ARG) -> None:
             store.insert_edges(resolved_edges)
             resolved_edge_count += len(resolved_edges)
 
+        all_nodes = [n for _f, r in parsed for n in r.nodes]
+        test_edges = TestLinkResolver().resolve(snapshot_id, all_nodes)
+        store.insert_edges(test_edges)
+
     typer.echo(
-        f"Analyzed {len(scanned_files)} files, extracted {symbol_count} symbols, "
-        f"resolved {resolved_edge_count} CALLS/IMPORTS edges."
+        f"Analyzed {len(scanned_files)} files, extracted {symbol_count} symbols "
+        f"({test_count} tests), resolved {resolved_edge_count} CALLS/IMPORTS edges "
+        f"and {len(test_edges)} TESTED_BY edges."
     )
     typer.echo(f"Snapshot: {snapshot_id}")
 
