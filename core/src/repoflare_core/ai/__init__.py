@@ -4,7 +4,7 @@ concrete free-tier implementations and a fallback chain. See docs/DECISIONS.md A
 from repoflare_core.ai.factory import BobProviderConfigError, default_bob_provider
 from repoflare_core.ai.fallback import FallbackBobProvider
 from repoflare_core.ai.gemini import GeminiProvider
-from repoflare_core.ai.openrouter import OpenRouterProvider
+from repoflare_core.ai.openrouter import NotAFreeModelError, OpenRouterProvider
 from repoflare_core.ai.provider import BobProvider, BobProviderError
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "BobProviderError",
     "FallbackBobProvider",
     "GeminiProvider",
+    "NotAFreeModelError",
     "OpenRouterProvider",
     "default_bob_provider",
 ]

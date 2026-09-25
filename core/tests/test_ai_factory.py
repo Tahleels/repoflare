@@ -29,13 +29,17 @@ def test_gemini_only(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(provider._providers) == 1  # noqa: SLF001
 
 
-def test_openrouter_requires_both_key_and_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openrouter_key_alone_defaults_to_free_router(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OPENROUTER_MODEL is optional — omitting it must fall back to openrouter/free, not error."""
     _clear_ai_env(monkeypatch)
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
-    # OPENROUTER_MODEL intentionally not set
 
-    with pytest.raises(BobProviderConfigError):
-        default_bob_provider()
+    provider = default_bob_provider()
+
+    assert isinstance(provider, FallbackBobProvider)
+    only_provider = provider._providers[0]  # noqa: SLF001
+    assert isinstance(only_provider, OpenRouterProvider)
+    assert only_provider._model == "openrouter/free"  # noqa: SLF001
 
 
 def test_both_configured_gemini_is_primary(monkeypatch: pytest.MonkeyPatch) -> None:

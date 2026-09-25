@@ -1,13 +1,15 @@
+from typing import Any
+
 import httpx
 import pytest
 
 from repoflare_core.ai.fallback import FallbackBobProvider
 from repoflare_core.ai.gemini import GeminiProvider
-from repoflare_core.ai.openrouter import OpenRouterProvider
+from repoflare_core.ai.openrouter import NotAFreeModelError, OpenRouterProvider
 from repoflare_core.ai.provider import BobProviderError
 
 
-def _client_returning(json_body: dict, status_code: int = 200) -> httpx.Client:
+def _client_returning(json_body: dict[str, Any], status_code: int = 200) -> httpx.Client:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status_code, json=json_body)
 
@@ -69,6 +71,22 @@ def test_gemini_raises_on_transport_error() -> None:
 
 
 # -- OpenRouterProvider -------------------------------------------------------------
+
+
+def test_openrouter_defaults_to_free_router_model() -> None:
+    provider = OpenRouterProvider(api_key="k", client=_client_returning({}))
+
+    assert provider._model == "openrouter/free"  # noqa: SLF001
+
+
+def test_openrouter_rejects_non_free_model() -> None:
+    with pytest.raises(NotAFreeModelError):
+        OpenRouterProvider(api_key="k", model="openai/gpt-5")
+
+
+def test_openrouter_accepts_free_suffixed_model() -> None:
+    # must not raise
+    OpenRouterProvider(api_key="k", model="some/model:free", client=_client_returning({}))
 
 
 def test_openrouter_extracts_content_from_response() -> None:

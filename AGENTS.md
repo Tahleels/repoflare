@@ -98,23 +98,32 @@ core/
                             printed explanation. Fails cleanly (exit 1, clear message) with
                             no provider configured — verified by smoke test.
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    106 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    109 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_graph_store, test_traversal,
                             test_change_detector, test_impact_analyzer, test_ai_providers,
                             test_ai_factory, test_context_retriever, test_cli
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 106 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 109 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
-smoke-tested end-to-end in throwaway git repos. `explain` with no `GEMINI_API_KEY`/
-`OPENROUTER_API_KEY` set correctly exits 1 with "No AI provider configured..." — the
-config-error path works. Nobody has smoke-tested `explain` against a *live* AI key yet
-(no key available in this session) — do that before relying on it for a demo, since the
-Gemini/OpenRouter request/response shapes were verified against docs, not a real call.
+smoke-tested end-to-end in throwaway git repos, INCLUDING against a real, live
+`GEMINI_API_KEY` — `repoflare explain --from <ref>` genuinely calls Gemini and prints a
+real explanation. `explain` with no provider configured correctly exits 1 with a clear
+message.
+
+`ai/openrouter.py::OpenRouterProvider` now defaults to and strictly enforces OpenRouter's
+official `openrouter/free` router (announced 2026-02-01 — see
+https://openrouter.ai/docs/guides/routing/routers/free-router) — the constructor raises
+`NotAFreeModelError` for any model id that isn't `openrouter/free` or doesn't end in
+`:free`, so this integration can never silently call a paid OpenRouter model.
+
+CLI stdout/stderr are forced to UTF-8 with `errors="replace"` at startup — AI-generated
+text routinely has em-dashes/curly quotes that corrupted output on a default Windows
+console codepage before this fix; verified fixed via the live smoke test above.
 
 Not started yet: `verification/`, `cache/`, `rpc/`, the `extension/` (VS Code) TypeScript
-side, and `export-html` (item 4 below).
+side, and `export-html` (item 6 below).
 
 ## Conventions in force — match these, don't introduce new patterns
 
@@ -146,19 +155,13 @@ CALLS/IMPORTS resolution, ChangeDetector, `impact/`, `ai/`, and `retrieval/` (+ 
 `explain` CLI command tying them together) are now done — see "Current state" above.
 Renumbered list below starts from what's actually left.
 
-1. **Smoke-test `explain` against a real AI key.** This is the highest-priority item — the
-   whole pipeline is built and unit-tested, but nobody has confirmed it works against a live
-   Gemini or OpenRouter endpoint. Get a free key, set `GEMINI_API_KEY`, run
-   `repoflare explain --from <ref>` in a real repo, and fix whatever the live response shape
-   reveals that the docs-verified assumption in `ai/gemini.py` got wrong.
-
-2. **Test discovery**, to make `retrieval/`'s `relevant_tests` field actually populate
+1. **Test discovery**, to make `retrieval/`'s `relevant_tests` field actually populate
    (currently always `[]` — see `retrieval/context_retriever.py`'s module docstring). Needs:
    detecting test files/functions during parsing (populate `NodeKind.TEST` nodes — nothing
    does this yet) and a `TESTED_BY` edge from symbol to test, likely via naming-convention
    heuristics (`test_foo` -> `foo`) as a first pass, not full coverage analysis.
 
-3. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, for more graph
+2. **Extend CALLS/IMPORTS resolution beyond its current bounded scope**, for more graph
    density (this directly improves `impact`/`explain` results — see the impact smoke-test
    note above about the cross-file-call gap): cross-file call resolution (the callee is
    imported from elsewhere — needs the IMPORTS edges plus a per-file "what names does this
@@ -167,22 +170,22 @@ Renumbered list below starts from what's actually left.
    these is independently scoped; don't try to do all of them in one pass. See
    `parsing/resolver.py`'s module docstring for exactly what's already covered.
 
-4. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
+3. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
    doesn't support the content-hash-keyed invalidation from `docs/DATA_MODEL.md`; write a
    small explicit wrapper) plus a `analysis_cache` table read/write path in `GraphStore`. Key
    format: `repository_id + snapshot_id + relevant_node_hashes + question_hash` (see
    `docs/DATA_MODEL.md` access-patterns table). `explain` is the expensive operation worth
    caching now that it exists — cache on `(change_set_id, context_id)`.
 
-5. **`rpc/` — JSON-RPC stdio server** — `impact`/`explain` now exist, so this is unblocked.
+4. **`rpc/` — JSON-RPC stdio server** — `impact`/`explain` now exist, so this is unblocked.
    This is what the VS Code extension will talk to (see `docs/ARCHITECTURE.md` ADR-001 for
    the protocol choice).
 
-6. **`extension/` — VS Code extension shell.** TypeScript client that spawns the core
+5. **`extension/` — VS Code extension shell.** TypeScript client that spawns the core
    subprocess and renders the first panel (repository overview). Depends on `rpc/` existing
    first.
 
-7. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
+6. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
    and renders its graph/impact view as a single static HTML file (no server, no backend at
    demo time). This exists specifically to satisfy the hackathon submission's required
    "Demo Application URL" field: host the exported file for free on GitHub Pages. It does

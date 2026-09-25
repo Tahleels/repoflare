@@ -8,6 +8,7 @@ command that always errors "not implemented" is worse than no command at all.
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +29,14 @@ from repoflare_core.parsing.resolver import CallImportResolver
 from repoflare_core.retrieval.context_retriever import ContextRetriever
 from repoflare_core.retrieval.prompt import format_explain_prompt
 from repoflare_core.scanning.scanner import RepositoryScanner
+
+# AI-generated explanations routinely contain non-ASCII characters (em-dashes, curly
+# quotes). Windows consoles often default stdout/stderr to a legacy codepage that can't
+# encode them, corrupting output instead of erroring — force UTF-8 with a safe fallback so
+# `explain` is never garbled mid-demo. No-op on platforms already using UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 app = typer.Typer(
     name="repoflare",

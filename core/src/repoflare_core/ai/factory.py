@@ -21,7 +21,9 @@ class BobProviderConfigError(RuntimeError):
 
 def default_bob_provider() -> BobProvider:
     """Gemini primary, OpenRouter fallback — see docs/DECISIONS.md ADR-004. Either or both
-    may be configured; at least one is required."""
+    may be configured; at least one is required. OPENROUTER_MODEL is optional and defaults
+    to OpenRouter's official `openrouter/free` router (see ai/openrouter.py) — OpenRouter
+    is never used with a paid model, by construction."""
     providers: list[BobProvider] = []
 
     gemini_key = os.environ.get("GEMINI_API_KEY")
@@ -29,13 +31,17 @@ def default_bob_provider() -> BobProvider:
         providers.append(GeminiProvider(api_key=gemini_key))
 
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")
-    openrouter_model = os.environ.get("OPENROUTER_MODEL")
-    if openrouter_key and openrouter_model:
-        providers.append(OpenRouterProvider(api_key=openrouter_key, model=openrouter_model))
+    if openrouter_key:
+        openrouter_model = os.environ.get("OPENROUTER_MODEL")
+        providers.append(
+            OpenRouterProvider(api_key=openrouter_key, model=openrouter_model)
+            if openrouter_model
+            else OpenRouterProvider(api_key=openrouter_key)
+        )
 
     if not providers:
         raise BobProviderConfigError(
-            "No AI provider configured — set GEMINI_API_KEY, or both OPENROUTER_API_KEY "
-            "and OPENROUTER_MODEL, in your environment (see .env.example)."
+            "No AI provider configured — set GEMINI_API_KEY and/or OPENROUTER_API_KEY "
+            "in your environment (see .env.example)."
         )
     return FallbackBobProvider(providers)
