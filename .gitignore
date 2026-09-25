@@ -15,6 +15,7 @@ htmlcov/
 # Node / VS Code extension
 node_modules/
 out/
+dist/
 *.vsix
 
 # Editor / OS

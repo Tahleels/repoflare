@@ -1,0 +1,5 @@
+# Extension build outputs
+dist/
+node_modules/
+*.vsix
+.vscode-test/

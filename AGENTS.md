@@ -1,4 +1,4 @@
-# RepoFlare — agent context
+﻿# RepoFlare — agent context
 
 Read this before doing anything else in this repo. It's written for whichever AI coding
 agent picks up work here next (including IBM Bob IDE) so you don't have to re-derive the
@@ -141,9 +141,51 @@ full pre-existing CLI test suite (all output-string assertions) passed unmodifie
 two monkeypatch targets that had to move to their new location
 (`repoflare_core.service.default_bob_provider`, not `repoflare_core.cli.main.*`).
 
-Not started yet: `verification/`, `cache/`, the `extension/` (VS Code) TypeScript side
-itself (rpc/ is what it will talk to — that part's ready), and `export-html` (item 4 below,
-renumbered — see "Next up").
+Not started yet: `verification/`, `cache/`, and `export-html` (item 3 below, renumbered —
+see "Next up").
+
+```
+extension/
+  package.json          npm-managed, TypeScript + esbuild, activates on VS Code startup
+  tsconfig.json         strict mode, commonjs/ES2020, rootDir=src
+  .vscodeignore         excludes dist/, node_modules/, *.vsix
+  src/
+    rpc.ts              RepoFlareRpcClient — Content-Length-framed JSON-RPC 2.0 client over
+                          child_process stdio. Spawns `python -m repoflare_core.rpc`,
+                          routes responses to promises by request id. Typed wrappers for
+                          all five RPC methods (init/analyze/status/impact/explain).
+                          RpcError with named error code constants for all -320xx codes.
+    extension.ts        activate() / deactivate(). One client per workspace folder.
+                          Commands: repoflare.showOverview, repoflare.analyze,
+                          repoflare.showImpact. withClient() handles NOT_INITIALIZED /
+                          NOT_ANALYZED with offer-to-fix prompts.
+    panel.ts            RepoFlarePanel — singleton WebviewPanel. show() creates or reveals.
+                          _initialLoad() fetches status, then shows overview or immediately
+                          runs impact if refs supplied. Handles webview messages (analyze,
+                          impact, back, ready) by calling back into the RPC client.
+                          _showOverview() factors out the fetch-status-and-render-overview
+                          sequence shared by "analyze" and "back".
+    webview.ts          buildWebviewHtml(state) — pure function, returns complete self-
+                          contained HTML string for loading / error / overview / impact
+                          states. Uses VS Code CSS variables for theming. Impact table
+                          shows category badges (DIRECT/INDIRECT/RELATED/POSSIBLE),
+                          symbol label, and file path. No external assets. Every dynamic
+                          value goes through escHtml() — verified by explicit XSS tests.
+  test/
+    webview.test.ts     7 tests: HTML-escaping (incl. a malicious repo-root path and
+                          impact-table values), empty states, CSP presence.
+    rpc.integration.test.ts  2 tests: spawns the REAL python -m repoflare_core.rpc via
+                          the actual RepoFlareRpcClient — init/analyze/status roundtrip,
+                          and JSON-RPC error codes (-32002, -32003) round-tripping
+                          correctly from a live server, not a mock. Self-skips (not fails)
+                          if `uv`/the core venv can't be resolved.
+  tsconfig.test.json     extends tsconfig.json, adds test/ to include, for `npm run typecheck`
+  dist/                 esbuild output (gitignored): extension.js + extension.js.map
+```
+
+Verified: `cd extension && npm install && npm run build` → clean, 23 KB bundle.
+`npm run typecheck` (src + test) → zero type errors (strict mode). `npm test` → 9/9 passing,
+including both real subprocess integration tests.
 
 ## Conventions in force — match these, don't introduce new patterns
 
@@ -193,15 +235,19 @@ what's actually left.
    `docs/DATA_MODEL.md` access-patterns table). `explain` is the expensive operation worth
    caching now that it exists — cache on `(change_set_id, context_id)`.
 
-3. **`extension/` — VS Code extension shell.** TypeScript client that spawns
-   `python -m repoflare_core.rpc` as a subprocess and talks Content-Length-framed JSON-RPC
-   to it (`repoflare/init`, `/analyze`, `/status`, `/impact`, `/explain` — see
-   `rpc/server.py`'s module docstring for exact params/error codes). First panel should be
-   a repository overview + an impact view. **This is an excellent Bob IDE candidate**: it's
-   a genuinely separate surface (new language — TypeScript — new component, doesn't touch
-   any Python code), it's substantial enough to generate real session history, and the RPC
-   contract it needs to implement against is already fully specified and tested, so Bob has
-   everything it needs without archaeology through the Python side.
+3. ~~**`extension/` — VS Code extension shell.**~~ Done — Bob IDE built this; see "Current
+   state" above and `extension/` tree below. Reviewed and lightly fixed afterward (not by
+   Bob): the "← Back to overview" button was a real bug — it posted a `ready` message
+   (handled as a no-op) and called `location.reload()`, which just re-rendered the current
+   impact HTML instead of returning to the overview. Fixed with a proper `back` message
+   type. Also removed an unused `EventEmitter` import in `rpc.ts`, and added a test suite
+   that didn't exist yet (`extension/test/`, `npm test`): 7 unit tests for
+   `webview.ts`'s HTML building — including explicit XSS-escaping checks on every dynamic
+   value (labels, file paths, refs, error messages, a maliciously-crafted repo root path) —
+   plus 2 real cross-language integration tests that spawn the actual
+   `python -m repoflare_core.rpc` subprocess through the real `RepoFlareRpcClient` (not
+   mocked on either side), proving the TS client and Python server genuinely agree on the
+   wire protocol, including that JSON-RPC error codes round-trip correctly end to end.
 
 4. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
    and renders its graph/impact view as a single static HTML file (no server, no backend at
