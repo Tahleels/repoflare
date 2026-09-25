@@ -42,14 +42,16 @@ talks to a spawned core process over JSON-RPC, matching the LSP integration patt
 | `ai/` | `BobProvider` interface + `GeminiProvider` / `OpenRouterProvider` implementations. Semantic reasoning only. | `domain` |
 | `verification/` | `VerificationService` — test-candidate selection and verification reasoning. | `impact`, `ai` |
 | `cache/` | `CacheProvider` — in-process LRU + persisted `analysis_cache` table (content-hash keyed). | `graph` |
-| `cli/` | Typer commands: `init`, `analyze`, `impact`, `explain`, `verify`, `status`. | everything above |
-| `rpc/` | JSON-RPC stdio server exposing the same operations to the VS Code extension. | everything above |
+| `service.py` | Orchestration layer: `run_init`/`run_analyze`/`run_status`/`run_impact`/`run_explain`. The *only* place that wires scanning → parsing → graph → change → impact → retrieval → ai together. `cli/` and `rpc/` both call this and nothing else — neither holds orchestration logic of its own, which is what makes "no duplicated business logic across CLI and extension" true rather than aspirational. | everything above |
+| `cli/` | Typer commands: `init`, `analyze`, `impact`, `explain`, `verify`, `status`. Formats/prints `service.py`'s results and maps its exceptions to exit codes. | `service.py` |
+| `rpc/` | JSON-RPC 2.0 stdio server (Content-Length framing, same as LSP) exposing `service.py`'s operations to the VS Code extension. JSON-encodes results and maps exceptions to JSON-RPC error codes. | `service.py` |
 | `config/` | Configuration loading (`.repoflare/config.toml`, env vars). | nothing |
 
-Dependency direction is strictly one-way: `cli`/`rpc` (interface layer) depend on the
-application services (`impact`, `retrieval`, `verification`), which depend on the
-infrastructure modules (`graph`, `ai`, `cache`), which depend on `domain`. `domain` depends
-on nothing. This is the dependency-inversion boundary SOLID requires, applied concretely.
+Dependency direction is strictly one-way: `cli`/`rpc` (interface layer) depend on
+`service.py` (orchestration), which depends on the application services (`impact`,
+`retrieval`, `verification`), which depend on the infrastructure modules (`graph`, `ai`,
+`cache`), which depend on `domain`. `domain` depends on nothing. This is the
+dependency-inversion boundary SOLID requires, applied concretely.
 
 ## 3. Canonical workflow
 

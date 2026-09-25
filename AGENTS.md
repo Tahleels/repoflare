@@ -18,7 +18,7 @@ architecture from scratch.
   already account for.
 - Submission also needs: a 500-word Problem & Solution statement, a 500-word IBM Bob Usage
   Statement (be specific about what Bob did), a ≤3-minute video (≥90s must show the solution
-  running), a slide PDF, and a **live Demo Application URL** — see item 5 in "Next up" below for how we're
+  running), a slide PDF, and a **live Demo Application URL** — see item 4 in "Next up" below for how we're
   satisfying that last one without turning RepoFlare into a web app.
 - Judging criteria (unweighted, no published point values): Application of Technology,
   Presentation, Business Value, Originality — all four explicitly reference "clear
@@ -90,27 +90,38 @@ core/
                             TESTED_BY edges — empty only when no matching test exists/was
                             detected, not a gap). format_explain_prompt (prompt.py) turns
                             that package into an LLM-ready prompt string.
-    cli/                    Typer commands: init, analyze, status, impact, explain — all
-                            working end to end. `analyze` resolves+inserts CALLS/IMPORTS
-                            and TESTED_BY edges, records git_commit_sha when run inside a
-                            git repo. `impact` diffs two refs and prints categorized,
-                            human-readable results. `explain` runs the full pipeline (git
-                            diff -> ChangeDetector -> ImpactAnalyzer -> ContextRetriever ->
-                            format_explain_prompt -> default_bob_provider().complete() ->
-                            printed explanation), failing cleanly with no provider
-                            configured. stdout/stderr forced to UTF-8 at startup (AI text
+    service.py              Orchestration layer (new this session): run_init/run_analyze/
+                            run_status/run_impact/run_explain — the ONLY place scanning ->
+                            parsing -> graph -> change -> impact -> retrieval -> ai get
+                            wired together. cli/ and rpc/ both call this and hold no
+                            orchestration logic themselves — see docs/ARCHITECTURE.md §2.
+    cli/                    Typer commands: init, analyze, status, impact, explain — thin
+                            wrappers over service.py: format/print its results, map its
+                            exceptions (NotInitializedError, NotAnalyzedError,
+                            GitCommandError, BobProviderConfigError, BobProviderError) to
+                            exit codes. stdout/stderr forced to UTF-8 at startup (AI text
                             has em-dashes/curly quotes that corrupted default Windows
                             console output before this fix).
+    rpc/                    JSON-RPC 2.0 stdio server (new this session) — Content-Length
+                            framing, identical wire format to LSP (protocol.py: read_message
+                            /write_message). server.py's RpcServer dispatches
+                            repoflare/{init,analyze,status,impact,explain} to service.py and
+                            JSON-encodes the (dataclass/Enum/Path) results. Exceptions map to
+                            JSON-RPC error codes: -32001 not initialized, -32002 not
+                            analyzed, -32003 git error, -32004 no AI provider configured,
+                            -32005 AI call failed, plus standard -32600/-32601/-32700.
+                            `python -m repoflare_core.rpc` is the entry point the VS Code
+                            extension will spawn as a subprocess (__main__.py).
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    122 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    148 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_test_resolver, test_graph_store,
                             test_traversal, test_change_detector, test_impact_analyzer,
                             test_ai_providers, test_ai_factory, test_context_retriever,
-                            test_cli
+                            test_service, test_rpc_protocol, test_rpc_server, test_cli
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 122 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 148 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
 smoke-tested end-to-end in throwaway git repos, INCLUDING `explain` against a real, live
 `GEMINI_API_KEY` — genuinely calls Gemini and prints a real explanation; encoding fix
@@ -120,18 +131,28 @@ and 0 false positives; 0 TESTED_BY links there specifically because this project
 names are descriptive (`test_scan_finds_known_language_files`) rather than the bare
 `test_<exact_function_name>` pattern the heuristic matches — the dedicated CLI test
 (`test_analyze_discovers_tests_and_links_them`) proves the link actually forms when naming
-does match.
+does match. `rpc/` was additionally smoke-tested by spawning the real
+`python -m repoflare_core.rpc` subprocess and talking to it over actual OS pipes (not just
+in-process `handle_request` calls) — correct framing, correct responses, clean exit on
+stdin close.
 
-Not started yet: `verification/`, `cache/`, `rpc/`, the `extension/` (VS Code) TypeScript
-side, and `export-html` (item 5 below — renumbered, see "Next up").
+The CLI refactor onto service.py was verified to change zero observable CLI behavior: the
+full pre-existing CLI test suite (all output-string assertions) passed unmodified except for
+two monkeypatch targets that had to move to their new location
+(`repoflare_core.service.default_bob_provider`, not `repoflare_core.cli.main.*`).
+
+Not started yet: `verification/`, `cache/`, the `extension/` (VS Code) TypeScript side
+itself (rpc/ is what it will talk to — that part's ready), and `export-html` (item 4 below,
+renumbered — see "Next up").
 
 ## Conventions in force — match these, don't introduce new patterns
 
-- **Module dependency direction is one-way**: `cli`/`rpc` → application services (`impact`,
-  `retrieval`, `verification`) → infrastructure (`graph`, `ai`, `cache`) → `domain`.
-  `domain` has zero dependencies on anything else in the package. See
-  `docs/ARCHITECTURE.md` §2 for the full table — a new module goes in the row that matches
-  what it depends on, not where it's convenient to put it.
+- **Module dependency direction is one-way**: `cli`/`rpc` → `service.py` (orchestration) →
+  application services (`impact`, `retrieval`, `verification`) → infrastructure (`graph`,
+  `ai`, `cache`) → `domain`. `domain` has zero dependencies on anything else in the package.
+  **Orchestration logic goes in `service.py`, never inline in a CLI command or an RPC
+  handler** — that's what keeps CLI and extension from duplicating business logic. See
+  `docs/ARCHITECTURE.md` §2 for the full table.
 - **Domain entities are frozen dataclasses with `slots=True`**, not pydantic — pydantic is
   reserved for boundary validation (CLI args, RPC payloads, config parsing), not internal
   hot-path graph objects. See `docs/DECISIONS.md` if you're unsure which to use for a new
@@ -172,22 +193,24 @@ what's actually left.
    `docs/DATA_MODEL.md` access-patterns table). `explain` is the expensive operation worth
    caching now that it exists — cache on `(change_set_id, context_id)`.
 
-3. **`rpc/` — JSON-RPC stdio server** — `impact`/`explain` now exist, so this is unblocked.
-   This is what the VS Code extension will talk to (see `docs/ARCHITECTURE.md` ADR-001 for
-   the protocol choice).
+3. **`extension/` — VS Code extension shell.** TypeScript client that spawns
+   `python -m repoflare_core.rpc` as a subprocess and talks Content-Length-framed JSON-RPC
+   to it (`repoflare/init`, `/analyze`, `/status`, `/impact`, `/explain` — see
+   `rpc/server.py`'s module docstring for exact params/error codes). First panel should be
+   a repository overview + an impact view. **This is an excellent Bob IDE candidate**: it's
+   a genuinely separate surface (new language — TypeScript — new component, doesn't touch
+   any Python code), it's substantial enough to generate real session history, and the RPC
+   contract it needs to implement against is already fully specified and tested, so Bob has
+   everything it needs without archaeology through the Python side.
 
-4. **`extension/` — VS Code extension shell.** TypeScript client that spawns the core
-   subprocess and renders the first panel (repository overview). Depends on `rpc/` existing
-   first.
-
-5. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
+4. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
    and renders its graph/impact view as a single static HTML file (no server, no backend at
    demo time). This exists specifically to satisfy the hackathon submission's required
    "Demo Application URL" field: host the exported file for free on GitHub Pages. It does
    NOT make RepoFlare a web app — the product stays CLI + extension; this is a one-command
-   shareable snapshot of output the CLI already computes. Depends on at least `impact/`
-   existing to be worth doing (a bare symbol list isn't a compelling demo page). Good Bob
-   candidate: rendering structured data as a page is squarely doc/tooling work.
+   shareable snapshot of output the CLI already computes. Also a solid Bob candidate:
+   rendering structured data (already available via `service.run_impact`) as a page is
+   squarely doc/tooling work.
 
 Whichever you pick, update this file's "Current state" and "Next up" sections when you're
 done, so the next agent (or the next Bob session) picks up from an accurate baseline instead

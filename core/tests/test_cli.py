@@ -170,7 +170,7 @@ def _commit_two_versions(repo: Path) -> str:
 
 
 def test_explain_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("repoflare_core.cli.main.default_bob_provider", lambda: _StubBobProvider())
+    monkeypatch.setattr("repoflare_core.service.default_bob_provider", lambda: _StubBobProvider())
     repo = tmp_path
     first_sha = _commit_two_versions(repo)
 
@@ -213,7 +213,7 @@ def test_explain_before_init_errors(tmp_path: Path) -> None:
 
 
 def test_explain_no_changes_reports_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("repoflare_core.cli.main.default_bob_provider", lambda: _StubBobProvider())
+    monkeypatch.setattr("repoflare_core.service.default_bob_provider", lambda: _StubBobProvider())
     repo = tmp_path
     (repo / "a.py").write_text("def f():\n    pass\n")
     _git(repo, "init", "-q")
