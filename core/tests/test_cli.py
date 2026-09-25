@@ -244,3 +244,53 @@ def test_analyze_discovers_tests_and_links_them(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "(1 tests)" in result.output
     assert "1 TESTED_BY edges" in result.output
+
+
+def test_export_html_overview_only(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def helper():\n    pass\n")
+    runner.invoke(app, ["init", str(tmp_path)])
+    runner.invoke(app, ["analyze", str(tmp_path)])
+
+    result = runner.invoke(app, ["export-html", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    report_path = tmp_path / ".repoflare" / "report.html"
+    assert report_path.exists()
+    html = report_path.read_text(encoding="utf-8")
+    assert "<html" in html
+    assert "Changed files" not in html
+
+
+def test_export_html_with_impact_and_custom_output(tmp_path: Path) -> None:
+    repo = tmp_path
+    (repo / "a.py").write_text("def helper():\n    pass\n")
+    (repo / "b.py").write_text("from a import helper\n\ndef entry():\n    helper()\n")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "T")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "first")
+    first_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    runner.invoke(app, ["init", str(repo)])
+    runner.invoke(app, ["analyze", str(repo)])
+    (repo / "a.py").write_text("def helper():\n    return 1\n")
+    _git(repo, "commit", "-a", "-q", "-m", "second")
+
+    custom_output = repo / "custom_report.html"
+    result = runner.invoke(
+        app, ["export-html", "--from", first_sha, "--output", str(custom_output), str(repo)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert custom_output.exists()
+    html = custom_output.read_text(encoding="utf-8")
+    assert "Changed files" in html
+    assert "a.py" in html
+
+
+def test_export_html_before_init_errors(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["export-html", str(tmp_path)])
+    assert result.exit_code == 1

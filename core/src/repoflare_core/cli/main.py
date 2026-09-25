@@ -19,6 +19,7 @@ import typer
 from repoflare_core.ai.factory import BobProviderConfigError
 from repoflare_core.ai.provider import BobProviderError
 from repoflare_core.change.git_adapter import GitCommandError
+from repoflare_core.export.html import render_html
 from repoflare_core.service import (
     NotAnalyzedError,
     NotInitializedError,
@@ -44,6 +45,12 @@ app = typer.Typer(
 )
 
 _REPO_ROOT_ARG = typer.Argument(Path("."), help="Repository root.")
+_EXPORT_FROM_OPT = typer.Option(
+    None, "--from", help="Git ref to diff from. Omit for an overview-only report."
+)
+_EXPORT_OUTPUT_OPT = typer.Option(
+    None, "--output", "-o", help="Output file. Defaults to <repo>/.repoflare/report.html."
+)
 
 
 @app.command()
@@ -164,6 +171,44 @@ def explain(
         typer.echo(f"No files changed between {from_ref} and {to_ref}.")
         return
     typer.echo(explanation)
+
+
+@app.command()
+def export_html(
+    from_ref: str | None = _EXPORT_FROM_OPT,
+    to_ref: str = typer.Option("HEAD", "--to", help="Git ref to diff to."),
+    output: Path | None = _EXPORT_OUTPUT_OPT,
+    path: Path = _REPO_ROOT_ARG,
+) -> None:
+    """Render a self-contained static HTML report (repository overview, plus an impact
+    view if --from is given). Not a web app — a one-command shareable snapshot of what the
+    CLI already computes, meant to be hosted as a plain static file."""
+    root = path.resolve()
+    try:
+        status = run_status(root)
+    except NotInitializedError:
+        typer.echo("error: not initialized — run 'repoflare init' first", err=True)
+        raise typer.Exit(code=1) from None
+
+    impact_summary = None
+    impact_refs = None
+    if from_ref is not None:
+        try:
+            impact_summary = run_impact(root, from_ref, to_ref)
+            impact_refs = (from_ref, to_ref)
+        except NotAnalyzedError:
+            typer.echo("Initialized, but not yet analyzed — run 'repoflare analyze'.")
+            raise typer.Exit(code=1) from None
+        except GitCommandError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+
+    html = render_html(str(root), status, impact_summary, impact_refs)
+
+    output_path = output if output is not None else root / ".repoflare" / "report.html"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html, encoding="utf-8")
+    typer.echo(f"Wrote report to {output_path}")
 
 
 if __name__ == "__main__":

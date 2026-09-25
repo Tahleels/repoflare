@@ -112,16 +112,21 @@ core/
                             -32005 AI call failed, plus standard -32600/-32601/-32700.
                             `python -m repoflare_core.rpc` is the entry point the VS Code
                             extension will spawn as a subprocess (__main__.py).
+    export/                 render_html (html.py) — pure function producing a self-
+                            contained static HTML report (repo overview + optional impact
+                            view). Mirrors extension/src/webview.ts's escape-everything
+                            discipline. Wired into the CLI as `export-html`.
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    148 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    158 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_test_resolver, test_graph_store,
                             test_traversal, test_change_detector, test_impact_analyzer,
                             test_ai_providers, test_ai_factory, test_context_retriever,
-                            test_service, test_rpc_protocol, test_rpc_server, test_cli
+                            test_service, test_rpc_protocol, test_rpc_server, test_export_html,
+                            test_cli
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 148 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 158 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
 smoke-tested end-to-end in throwaway git repos, INCLUDING `explain` against a real, live
 `GEMINI_API_KEY` — genuinely calls Gemini and prints a real explanation; encoding fix
@@ -141,8 +146,17 @@ full pre-existing CLI test suite (all output-string assertions) passed unmodifie
 two monkeypatch targets that had to move to their new location
 (`repoflare_core.service.default_bob_provider`, not `repoflare_core.cli.main.*`).
 
-Not started yet: `verification/`, `cache/`, and `export-html` (item 3 below, renumbered —
-see "Next up").
+`export/html.py::render_html` is a pure function (state in, HTML string out) producing a
+self-contained static report — mirrors `extension/src/webview.ts`'s approach deliberately,
+including the same escape-every-dynamic-value discipline (7 dedicated tests cover this,
+including two explicit XSS-payload checks). Wired into the CLI as
+`repoflare export-html [--from <ref>] [--to <ref>] [--output <path>]` — overview-only if
+`--from` is omitted, overview + impact table if given. Defaults to
+`<repo>/.repoflare/report.html`. Smoke-tested: produced a real, valid, self-contained HTML
+file in a throwaway repo, inspected by hand — renders correctly, no external assets, ready
+to host as-is on GitHub Pages for the hackathon's required Demo Application URL.
+
+Not started yet: `verification/`, `cache/`.
 
 ```
 extension/
@@ -249,14 +263,14 @@ what's actually left.
    mocked on either side), proving the TS client and Python server genuinely agree on the
    wire protocol, including that JSON-RPC error codes round-trip correctly end to end.
 
-4. **`repoflare export-html`** — a CLI command that takes an already-analyzed repository
-   and renders its graph/impact view as a single static HTML file (no server, no backend at
-   demo time). This exists specifically to satisfy the hackathon submission's required
-   "Demo Application URL" field: host the exported file for free on GitHub Pages. It does
-   NOT make RepoFlare a web app — the product stays CLI + extension; this is a one-command
-   shareable snapshot of output the CLI already computes. Also a solid Bob candidate:
-   rendering structured data (already available via `service.run_impact`) as a page is
-   squarely doc/tooling work.
+4. ~~**`repoflare export-html`**~~ Done — see `export/html.py` and "Current state" above.
+   Real report generated and hand-inspected in a throwaway repo: valid, self-contained
+   HTML, no external assets, ready to host as-is (e.g. GitHub Pages) for the hackathon's
+   required Demo Application URL field. **You still need to actually host it and paste that
+   URL into the submission form** — this only produces the file.
+
+Only two items left: item 1 (CALLS/IMPORTS extension) and item 2 (`cache/`) above — pick
+either.
 
 Whichever you pick, update this file's "Current state" and "Next up" sections when you're
 done, so the next agent (or the next Bob session) picks up from an accurate baseline instead
