@@ -16,7 +16,7 @@ def format_explain_prompt(context: AIContextPackage) -> str:
         "",
         f"Directly affected symbols: {', '.join(context.direct_dependents) or 'none'}",
         "",
-        "Relevant source:",
+        "Relevant source (each block starts with its own [path#Lstart-Lend] citation tag):",
     ]
     for file_path, snippet in context.snippets.items():
         lines.append(f"--- {file_path} ---")
@@ -24,6 +24,8 @@ def format_explain_prompt(context: AIContextPackage) -> str:
         lines.append("")
     lines.append(
         "Explain, in plain language, what this change affects and what a developer "
-        "should double-check before merging it."
+        "should double-check before merging it. Ground every specific claim in a citation, "
+        "copying the exact [path#Lstart-Lend] tag shown above the relevant snippet — never "
+        "invent a tag that wasn't shown to you."
     )
     return "\n".join(lines)

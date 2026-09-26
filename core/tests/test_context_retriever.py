@@ -98,8 +98,8 @@ def test_build_context_includes_snippets_and_graph_path(tmp_path: Path) -> None:
     assert context.change_set_id == "cs1"
     assert context.direct_dependents == ["b_entry"]
     assert context.graph_paths == [["a_helper", "b_entry"]]
-    assert context.snippets["a.py"] == "def helper():\n    pass"
-    assert context.snippets["b.py"] == "def entry():\n    helper()"
+    assert context.snippets["a.py"] == "[a.py#L1-L2]\ndef helper():\n    pass"
+    assert context.snippets["b.py"] == "[b.py#L1-L2]\ndef entry():\n    helper()"
 
 
 def test_build_context_empty_impact_still_returns_changed_snippets(tmp_path: Path) -> None:

@@ -103,7 +103,9 @@ class ContextRetriever:
     def _snippets(self, node_ids: list[str], repository_root: Path) -> dict[str, str]:
         # Keyed by file path (per AIContextPackage.snippets' contract), so two symbols from
         # the same file must be appended, not overwritten — losing one silently would defeat
-        # the point of a *targeted* context package.
+        # the point of a *targeted* context package. Each block carries its own
+        # [path#Lstart-Lend] citation tag so the prompt can ask the model to cite verbatim
+        # even when several symbols from the same file are concatenated together.
         snippets: dict[str, str] = {}
         for node_id in node_ids:
             node = self._store.get_node(node_id)
@@ -124,4 +126,6 @@ class ContextRetriever:
             lines = (repository_root / node.file_path).read_text(encoding="utf-8").splitlines()
         except OSError:
             return None
-        return "\n".join(lines[node.start_line - 1 : node.end_line])
+        source = "\n".join(lines[node.start_line - 1 : node.end_line])
+        citation_tag = f"[{node.file_path}#L{node.start_line}-L{node.end_line}]"
+        return f"{citation_tag}\n{source}"
