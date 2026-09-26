@@ -269,14 +269,18 @@ def run_explain(root: Path, from_ref: str, to_ref: str = "HEAD") -> str | None:
         results = ImpactAnalyzer(store, traversal).analyze(change_set)
         context = ContextRetriever(store, traversal).build_context(change_set, results, root)
 
+        # Keying on the fully-formatted prompt text (not just change_set_id/context_id)
+        # means an edit to the prompt template itself changes the key and naturally
+        # invalidates old cached answers — no separate template-version bookkeeping needed.
+        prompt = format_explain_prompt(context)
         cache = CacheProvider(store.raw_connection())
-        cache_key = stable_id(change_set.change_set_id, context.context_id)
+        cache_key = stable_id(prompt)
         cached = cache.get(cache_key)
         if cached is not None:
             return str(json.loads(cached)["text"])
 
     provider = default_bob_provider()
-    explanation = provider.complete(format_explain_prompt(context))
+    explanation = provider.complete(prompt)
 
     with GraphStore(db_path) as store:
         CacheProvider(store.raw_connection()).set(cache_key, {"text": explanation})

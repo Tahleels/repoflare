@@ -26,6 +26,9 @@ def format_explain_prompt(context: AIContextPackage) -> str:
         "Explain, in plain language, what this change affects and what a developer "
         "should double-check before merging it. Ground every specific claim in a citation, "
         "copying the exact [path#Lstart-Lend] tag shown above the relevant snippet — never "
-        "invent a tag that wasn't shown to you."
+        "invent a tag that wasn't shown to you. Scale your answer to the change: a trivial, "
+        "low-risk change deserves 2-3 sentences and no checklist; only use headers or a "
+        "numbered list when the change is genuinely complex enough to need one. Do not pad "
+        "a simple answer to sound thorough."
     )
     return "\n".join(lines)
