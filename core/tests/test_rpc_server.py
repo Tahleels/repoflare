@@ -1,6 +1,9 @@
 import io
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from repoflare_core.rpc.protocol import read_message, write_message
 from repoflare_core.rpc.server import RpcServer
@@ -37,6 +40,42 @@ def test_init_analyze_status_over_rpc(tmp_path: Path) -> None:
     assert status_response is not None
     assert status_response["result"]["node_count"] == 3
     assert status_response["result"]["edge_count"] == 3
+
+
+def test_init_and_analyze_agree_on_repository_id_despite_path_casing(tmp_path: Path) -> None:
+    """Regression: rpc/server.py used to pass an unresolved Path straight through to
+    service.py, so a differently-cased but identical Windows path (e.g. a VS Code
+    workspace fsPath, which lowercases the drive letter) hashed to a different
+    repository_id than the CLI's `.resolve()`-normalized path — causing a foreign-key
+    error on `analyze` after an `init` done under a different case of the same path.
+    _resolve_path() fixes this by resolving before hashing, matching cli/main.py."""
+    if not sys.platform.startswith("win"):
+        pytest.skip("drive-letter casing is a Windows-only path quirk")
+
+    (tmp_path / "a.py").write_text("def helper():\n    pass\n")
+    server = RpcServer()
+
+    canonical = str(tmp_path)
+    assert canonical[1] == ":"
+    differently_cased = canonical[0].swapcase() + canonical[1:]
+
+    init_response = server.handle_request(
+        {"jsonrpc": "2.0", "id": 1, "method": "repoflare/init", "params": {"path": canonical}}
+    )
+    assert init_response is not None
+    assert "error" not in init_response
+
+    analyze_response = server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "repoflare/analyze",
+            "params": {"path": differently_cased},
+        }
+    )
+    assert analyze_response is not None
+    assert "error" not in analyze_response
+    assert analyze_response["result"]["symbol_count"] == 1
 
 
 def test_impact_and_explain_over_rpc(tmp_path: Path) -> None:

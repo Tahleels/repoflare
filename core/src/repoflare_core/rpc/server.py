@@ -74,24 +74,35 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _resolve_path(params: dict[str, Any]) -> Path:
+    # Must match cli/main.py's `path.resolve()` exactly: repository_id() and
+    # graph_db_path() both derive from this path's string form, and an unresolved path
+    # (e.g. a VS Code workspace fsPath, which lowercases the Windows drive letter) hashes
+    # differently from the CLI's resolved form even though it's the same directory on
+    # disk — causing a repository_id mismatch (and a DB foreign-key error on analyze)
+    # between a repo `init`ed via the CLI and then `analyze`d via the RPC client, or
+    # vice versa.
+    return Path(params["path"]).resolve()
+
+
 def _handle_init(params: dict[str, Any]) -> Any:
-    return _to_jsonable(run_init(Path(params["path"])))
+    return _to_jsonable(run_init(_resolve_path(params)))
 
 
 def _handle_analyze(params: dict[str, Any]) -> Any:
-    return _to_jsonable(run_analyze(Path(params["path"])))
+    return _to_jsonable(run_analyze(_resolve_path(params)))
 
 
 def _handle_status(params: dict[str, Any]) -> Any:
-    return _to_jsonable(run_status(Path(params["path"])))
+    return _to_jsonable(run_status(_resolve_path(params)))
 
 
 def _handle_impact(params: dict[str, Any]) -> Any:
-    return _to_jsonable(run_impact(Path(params["path"]), params["from"], params.get("to", "HEAD")))
+    return _to_jsonable(run_impact(_resolve_path(params), params["from"], params.get("to", "HEAD")))
 
 
 def _handle_explain(params: dict[str, Any]) -> Any:
-    explanation = run_explain(Path(params["path"]), params["from"], params.get("to", "HEAD"))
+    explanation = run_explain(_resolve_path(params), params["from"], params.get("to", "HEAD"))
     return {"explanation": explanation}
 
 
