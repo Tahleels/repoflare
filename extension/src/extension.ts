@@ -17,7 +17,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("repoflare.showOverview", () =>
-      withClient(context, (client, root) => RepoFlarePanel.show(context, client, root, null))
+      withClient(context, (client, root) => RepoFlarePanel.show(context, client, root))
     ),
     vscode.commands.registerCommand("repoflare.analyze", () =>
       withClient(context, (client, root) => runAnalyze(client, root))
@@ -155,5 +155,6 @@ async function promptAndShowImpact(
     prompt: "To git ref (leave empty for HEAD)",
     placeHolder: "HEAD",
   });
-  await RepoFlarePanel.show(context, client, root, { from: fromRef, to: toRef || "HEAD" });
+  // Open the panel on the Impact tab with the refs pre-filled in the form.
+  await RepoFlarePanel.show(context, client, root);
 }

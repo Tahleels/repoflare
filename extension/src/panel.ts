@@ -1,39 +1,35 @@
 /**
- * RepoFlarePanel — the single VS Code WebviewPanel that renders both the repository
- * overview and the impact view.
+ * RepoFlarePanel — the single VS Code WebviewPanel that renders the RepoFlare UI.
  *
  * Design:
  *  - One panel instance per workspace (singleton).
- *  - Created or revealed by `RepoFlarePanel.show(...)`.
- *  - The panel always loads current status on open, then either shows the overview or
- *    immediately runs an impact query if refs were supplied.
- *  - Messages from the webview (e.g. "user clicked Analyze") are dispatched back to the
- *    extension and handled here, so the panel never holds a reference to the RPC client.
+ *  - All four tabs (Overview, Analyze, Impact, Graph) are rendered into the page at once.
+ *    Tab switching happens in pure client-side JS — no round-trip to the host, no blink.
+ *  - Only two messages still travel host→webview→host:
+ *      "analyze"  — user clicked Analyze
+ *      "impact"   — user submitted the impact form
+ *  - The panel caches the last-fetched status and graph so switching tabs never re-fetches.
  */
 
 import * as vscode from "vscode";
-import { RepoFlareRpcClient, ImpactSummary, RpcError } from "./rpc";
-import { buildWebviewHtml } from "./webview";
-
-interface ImpactRequest {
-  from: string;
-  to: string;
-}
+import { RepoFlareRpcClient, ImpactSummary, RpcError, StatusResult, GraphOverview } from "./rpc";
+import { buildWebviewHtml, PanelState } from "./webview";
 
 // Messages the webview sends to the extension host.
 type WebviewMessage =
   | { type: "analyze" }
   | { type: "impact"; from: string; to: string }
-  | { type: "back" }
-  | { type: "ready" }
-  | { type: "nav-graph" }
-  | { type: "nav-impact" };
+  | { type: "ready" };
 
 export class RepoFlarePanel {
   private static _current: RepoFlarePanel | undefined;
 
   private readonly _panel: vscode.WebviewPanel;
   private readonly _disposables: vscode.Disposable[] = [];
+
+  // Cached data so tab switches don't re-fetch
+  private _status: StatusResult | null = null;
+  private _graph: GraphOverview | null = null;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -43,7 +39,6 @@ export class RepoFlarePanel {
   ) {
     this._panel = panel;
     this._panel.onDidDispose(() => this._dispose(), null, this._disposables);
-
     this._panel.webview.onDidReceiveMessage(
       (msg: WebviewMessage) => this._handleMessage(msg),
       null,
@@ -52,14 +47,12 @@ export class RepoFlarePanel {
   }
 
   /**
-   * Create or reveal the panel.  If `impactRequest` is non-null the panel will immediately
-   * run an impact query on load; otherwise it shows the overview.
+   * Create or reveal the panel, opening on the Overview tab.
    */
   static async show(
     context: vscode.ExtensionContext,
     client: RepoFlareRpcClient,
-    root: string,
-    impactRequest: ImpactRequest | null
+    root: string
   ): Promise<void> {
     const column = vscode.window.activeTextEditor
       ? vscode.window.activeTextEditor.viewColumn
@@ -67,9 +60,6 @@ export class RepoFlarePanel {
 
     if (RepoFlarePanel._current) {
       RepoFlarePanel._current._panel.reveal(column);
-      if (impactRequest) {
-        await RepoFlarePanel._current._showImpact(impactRequest.from, impactRequest.to);
-      }
       return;
     }
 
@@ -79,17 +69,16 @@ export class RepoFlarePanel {
       column ?? vscode.ViewColumn.One,
       {
         enableScripts: true,
-        // No local resources needed — all assets are inlined.
         localResourceRoots: [],
         retainContextWhenHidden: true,
       }
     );
 
     RepoFlarePanel._current = new RepoFlarePanel(panel, context, client, root);
-    await RepoFlarePanel._current._initialLoad(impactRequest);
+    await RepoFlarePanel._current._load("overview");
   }
 
-  /** Open the panel directly on the graph view. */
+  /** Open the panel directly on the graph tab. */
   static async showGraph(
     context: vscode.ExtensionContext,
     client: RepoFlareRpcClient,
@@ -101,7 +90,7 @@ export class RepoFlarePanel {
 
     if (RepoFlarePanel._current) {
       RepoFlarePanel._current._panel.reveal(column);
-      await RepoFlarePanel._current._showGraphView();
+      // Panel is already open — no re-fetch needed; the graph tab is already rendered.
       return;
     }
 
@@ -112,80 +101,49 @@ export class RepoFlarePanel {
       { enableScripts: true, localResourceRoots: [], retainContextWhenHidden: true }
     );
     RepoFlarePanel._current = new RepoFlarePanel(panel, context, client, root);
-    await RepoFlarePanel._current._showGraphView();
+    await RepoFlarePanel._current._load("graph");
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
 
-  private async _initialLoad(impactRequest: ImpactRequest | null): Promise<void> {
+  /**
+   * Fetches status + graph in parallel (graph may fail gracefully) and renders the full page.
+   * Subsequent tab switches happen client-side without calling this again.
+   */
+  private async _load(
+    activeTab: "overview" | "impact" | "graph",
+    impactResult?: { from: string; to: string; impact: ImpactSummary }
+  ): Promise<void> {
     this._panel.webview.html = buildWebviewHtml({ state: "loading" });
     try {
-      const status = await this._client.status(this._root);
-      if (impactRequest) {
-        await this._showImpact(impactRequest.from, impactRequest.to);
-      } else {
-        this._panel.webview.html = buildWebviewHtml({ state: "overview", status, root: this._root });
-      }
+      // Fetch status unconditionally; use cached graph if available.
+      const [status, graph] = await Promise.all([
+        this._client.status(this._root),
+        this._graph
+          ? Promise.resolve(this._graph)
+          : this._client.graphOverview(this._root).catch(() => null),
+      ]);
+      this._status = status;
+      if (graph) { this._graph = graph; }
+
+      this._panel.webview.html = buildWebviewHtml({
+        state: "ready",
+        status,
+        root: this._root,
+        graph: this._graph,
+        activeTab,
+        impactResult,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this._panel.webview.html = buildWebviewHtml({ state: "error", message });
     }
   }
 
-  private async _showImpact(from: string, to: string): Promise<void> {
-    this._panel.webview.html = buildWebviewHtml({ state: "loading" });
-    try {
-      const [status, impact] = await Promise.all([
-        this._client.status(this._root),
-        this._client.impact(this._root, from, to),
-      ]);
-      this._panel.webview.html = buildWebviewHtml({
-        state: "impact",
-        status,
-        root: this._root,
-        from,
-        to,
-        impact,
-      });
-    } catch (err) {
-      if (err instanceof RpcError) {
-        this._panel.webview.html = buildWebviewHtml({
-          state: "error",
-          message: `${err.message} (code ${err.code})`,
-        });
-      } else {
-        const message = err instanceof Error ? err.message : String(err);
-        this._panel.webview.html = buildWebviewHtml({ state: "error", message });
-      }
-    }
-  }
-
-  private async _showGraphView(): Promise<void> {
-    this._panel.webview.html = buildWebviewHtml({ state: "loading" });
-    try {
-      const graph = await this._client.graphOverview(this._root);
-      this._panel.webview.html = buildWebviewHtml({
-        state: "graph",
-        graph,
-        total_node_count: graph.total_node_count,
-      });
-    } catch (err) {
-      if (err instanceof RpcError) {
-        this._panel.webview.html = buildWebviewHtml({
-          state: "error",
-          message: `${err.message} (code ${err.code})`,
-        });
-      } else {
-        const message = err instanceof Error ? err.message : String(err);
-        this._panel.webview.html = buildWebviewHtml({ state: "error", message });
-      }
-    }
-  }
-
   private async _handleMessage(msg: WebviewMessage): Promise<void> {
     switch (msg.type) {
       case "ready":
-        // Webview signals it has fully loaded — nothing to do currently.
+        // Webview signals it has fully loaded — nothing to do.
         break;
 
       case "analyze":
@@ -196,41 +154,42 @@ export class RepoFlarePanel {
             `RepoFlare: analyzed ${result.file_count} files, ` +
             `${result.symbol_count} symbols, ${result.test_count} tests.`
           );
+          // Bust the graph cache so the freshly-analyzed graph is fetched.
+          this._graph = null;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this._panel.webview.html = buildWebviewHtml({ state: "error", message });
           break;
         }
-        await this._showOverview();
+        await this._load("overview");
         break;
 
       case "impact":
-        await this._showImpact(msg.from, msg.to);
+        this._panel.webview.html = buildWebviewHtml({ state: "loading" });
+        try {
+          const status = this._status ?? await this._client.status(this._root);
+          const impact = await this._client.impact(this._root, msg.from, msg.to);
+          this._status = status;
+          this._panel.webview.html = buildWebviewHtml({
+            state: "ready",
+            status,
+            root: this._root,
+            graph: this._graph,
+            activeTab: "impact",
+            impactResult: { from: msg.from, to: msg.to, impact },
+          });
+        } catch (err) {
+          if (err instanceof RpcError) {
+            this._panel.webview.html = buildWebviewHtml({
+              state: "error",
+              message: `${err.message} (code ${err.code})`,
+            });
+          } else {
+            const message = err instanceof Error ? err.message : String(err);
+            this._panel.webview.html = buildWebviewHtml({ state: "error", message });
+          }
+        }
         break;
-
-      case "back":
-        await this._showOverview();
-        break;
-
-      case "nav-graph":
-        await this._showGraphView();
-        break;
-
-      case "nav-impact":
-        // Open the impact form — navigate to overview (which has the impact form built in).
-        await this._showOverview();
-        break;
-    }
-  }
-
-  private async _showOverview(): Promise<void> {
-    this._panel.webview.html = buildWebviewHtml({ state: "loading" });
-    try {
-      const status = await this._client.status(this._root);
-      this._panel.webview.html = buildWebviewHtml({ state: "overview", status, root: this._root });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this._panel.webview.html = buildWebviewHtml({ state: "error", message });
     }
   }
 
