@@ -1,0 +1,50 @@
+RepoFlare `explain` — pre-baked fallback output for video recording
+=====================================================================
+
+Use this ONLY if the live Gemini/OpenRouter call stalls or errors mid-take during
+recording. This is a real, live-generated output (not fabricated) — captured 2026-09-26
+against the tiny 2-file demo repo described in docs/DEMO_SCRIPT.md:
+
+  utils.py:
+    def calculate_total(items):
+        return sum(items)          # before
+        return sum(items) * 1.0    # after
+
+  main.py:
+    from utils import calculate_total
+    def run():
+        return calculate_total([1, 2, 3])
+
+Command run: repoflare explain --from <before-commit> --to <after-commit> <repo>
+
+--------------------------------------------------------------------
+### What This Change Affects
+
+This change directly affects the `calculate_total` function, which computes the sum of the
+elements in an iterable `items` and scales or converts the result by multiplying it by `1.0`
+[utils.py#L1-L2]. Any part of the codebase calling `calculate_total` will receive this
+result as a floating-point number [utils.py#L1-L2].
+
+### What a Developer Should Double-Check
+
+1. **Floating-Point Precision and Return Type:**
+   Multiplying by `1.0` explicitly forces the return value to be a `float`
+   [utils.py#L1-L2]. Check whether downstream callers expect an exact type (such as `int`
+   or `decimal.Decimal` for currency/financial math), as converting to a float can
+   introduce floating-point inaccuracies or break strict type checks.
+2. **Element Compatibility:**
+   Verify that `items` is guaranteed to contain numeric types compatible with Python's
+   built-in `sum()` and float multiplication [utils.py#L1-L2]. Passing non-numeric types
+   or custom objects that do not support addition with `0` or multiplication with a float
+   will raise a `TypeError` [utils.py#L1-L2].
+3. **Empty Input Behavior:**
+   Confirm whether returning `0.0` is the expected behavior when `items` is empty, as
+   `sum([]) * 1.0` evaluates to `0.0` [utils.py#L1-L2].
+--------------------------------------------------------------------
+
+Corresponding `repoflare impact` output for the same commit range (deterministic, no AI,
+safe to show live even if this fallback is needed for the explain beat only):
+
+Changed files (1): utils.py
+DIRECT (1):
+  main (main.py)
