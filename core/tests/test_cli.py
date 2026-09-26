@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 
@@ -28,8 +29,12 @@ def test_init_analyze_status_end_to_end(tmp_path: Path) -> None:
 
     status_result = runner.invoke(app, ["status", str(tmp_path)])
     assert status_result.exit_code == 0, status_result.output
-    # 1 file + 2 symbols = 3 nodes; 2 CONTAINS edges + 1 CALLS edge = 3 edges
-    assert "Nodes: 3, Edges: 3" in status_result.output
+    # 1 file + 2 symbols = 3 nodes; 2 CONTAINS edges + 1 CALLS edge = 3 edges. rich renders
+    # a plain-text table when stdout isn't a TTY (e.g. pytest capture) rather than a fixed
+    # layout string — bind each count to its own row (not just "3" anywhere in the output)
+    # so a bug that swapped the Nodes/Edges columns would still fail this test.
+    assert re.search(r"Nodes\s+3", status_result.output)
+    assert re.search(r"Edges\s+3", status_result.output)
 
 
 def test_status_before_init_errors(tmp_path: Path) -> None:

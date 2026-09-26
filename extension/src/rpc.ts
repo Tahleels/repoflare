@@ -58,6 +58,26 @@ export interface ExplainResult {
   explanation: string | null;
 }
 
+export interface GraphNode {
+  node_id: string;
+  kind: string;
+  name: string;
+  file_path: string | null;
+}
+
+export interface GraphEdge {
+  src_node_id: string;
+  dst_node_id: string;
+  edge_type: string;
+}
+
+export interface GraphOverview {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  truncated: boolean;
+  total_node_count: number;
+}
+
 // ── Error from the server ──────────────────────────────────────────────────────
 
 export class RpcError extends Error {
@@ -150,6 +170,10 @@ export class RepoFlareRpcClient {
 
   explain(path: string, from: string, to = "HEAD"): Promise<ExplainResult> {
     return this._call("repoflare/explain", { path, from, to }) as Promise<ExplainResult>;
+  }
+
+  graphOverview(path: string): Promise<GraphOverview> {
+    return this._call("repoflare/graph", { path }) as Promise<GraphOverview>;
   }
 
   dispose(): void {

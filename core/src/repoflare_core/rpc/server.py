@@ -34,6 +34,7 @@ from repoflare_core.service import (
     NotInitializedError,
     run_analyze,
     run_explain,
+    run_graph_overview,
     run_impact,
     run_init,
     run_status,
@@ -106,12 +107,17 @@ def _handle_explain(params: dict[str, Any]) -> Any:
     return {"explanation": explanation}
 
 
+def _handle_graph(params: dict[str, Any]) -> Any:
+    return _to_jsonable(run_graph_overview(_resolve_path(params)))
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any]], Any]] = {
     "repoflare/init": _handle_init,
     "repoflare/analyze": _handle_analyze,
     "repoflare/status": _handle_status,
     "repoflare/impact": _handle_impact,
     "repoflare/explain": _handle_explain,
+    "repoflare/graph": _handle_graph,
 }
 
 

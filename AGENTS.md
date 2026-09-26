@@ -125,13 +125,13 @@ core/
                             set(key, result, ttl) upserts. Takes the raw DuckDB connection
                             from GraphStore.raw_connection() — no second connection opened.
                             Wired into service.py::run_explain: cache key is
-                            stable_id(change_set_id, context_id); hit → return immediately
-                            without calling the AI provider; miss → call provider, write
-                            result back, return. 10 tests in test_cache_provider.py cover
-                            get/set roundtrip, overwrite, TTL, expiry pruning, and the
-                            cache-hit short-circuit in run_explain end-to-end.
+                            stable_id(prompt text); hit → return immediately without calling
+                            the AI provider; miss → call provider, write result back, return.
+                            10 tests in test_cache_provider.py cover get/set roundtrip,
+                            overwrite, TTL, expiry pruning, and the cache-hit short-circuit
+                            in run_explain end-to-end.
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    168 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    181 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_test_resolver, test_graph_store,
                             test_traversal, test_change_detector, test_impact_analyzer,
@@ -140,7 +140,7 @@ core/
                             test_cli, test_cache_provider
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 168 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 181 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
 smoke-tested end-to-end in throwaway git repos, INCLUDING `explain` against a real, live
 `GEMINI_API_KEY` — genuinely calls Gemini and prints a real explanation; encoding fix
@@ -174,34 +174,41 @@ Not started yet: `verification/`.
 
 ```
 extension/
-  package.json          npm-managed, TypeScript + esbuild, activates on VS Code startup
+  package.json          npm-managed, TypeScript + esbuild, activates on VS Code startup.
+                          Now includes repoflare.showGraph command.
   tsconfig.json         strict mode, commonjs/ES2020, rootDir=src
   .vscodeignore         excludes dist/, node_modules/, *.vsix
   src/
     rpc.ts              RepoFlareRpcClient — Content-Length-framed JSON-RPC 2.0 client over
                           child_process stdio. Spawns `python -m repoflare_core.rpc`,
                           routes responses to promises by request id. Typed wrappers for
-                          all five RPC methods (init/analyze/status/impact/explain).
+                          all six RPC methods (init/analyze/status/impact/explain/graph).
                           RpcError with named error code constants for all -320xx codes.
+                          GraphNode/GraphEdge/GraphOverview interfaces added.
     extension.ts        activate() / deactivate(). One client per workspace folder.
                           Commands: repoflare.showOverview, repoflare.analyze,
-                          repoflare.showImpact. withClient() handles NOT_INITIALIZED /
-                          NOT_ANALYZED with offer-to-fix prompts.
-    panel.ts            RepoFlarePanel — singleton WebviewPanel. show() creates or reveals.
-                          _initialLoad() fetches status, then shows overview or immediately
-                          runs impact if refs supplied. Handles webview messages (analyze,
-                          impact, back, ready) by calling back into the RPC client.
-                          _showOverview() factors out the fetch-status-and-render-overview
-                          sequence shared by "analyze" and "back".
+                          repoflare.showImpact, repoflare.showGraph. withClient() handles
+                          NOT_INITIALIZED / NOT_ANALYZED with offer-to-fix prompts.
+    panel.ts            RepoFlarePanel — singleton WebviewPanel. show()/showGraph() create
+                          or reveal. Handles webview messages (analyze, impact, back, ready,
+                          nav-graph, nav-impact). _showGraphView() fetches graphOverview and
+                          renders the graph state.
     webview.ts          buildWebviewHtml(state) — pure function, returns complete self-
-                          contained HTML string for loading / error / overview / impact
-                          states. Uses VS Code CSS variables for theming. Impact table
-                          shows category badges (DIRECT/INDIRECT/RELATED/POSSIBLE),
-                          symbol label, and file path. No external assets. Every dynamic
-                          value goes through escHtml() — verified by explicit XSS tests.
+                          contained HTML string for loading / error / overview / impact /
+                          graph states. Nav bar always visible across all states. Overview
+                          shows a friendly first-run prompt when no snapshot yet. Graph
+                          state: deterministic two-ring circular SVG layout, colored nodes
+                          by kind (FILE=blue rect, SYMBOL=green circle, TEST=amber circle,
+                          etc.), edge lines, click-to-detail panel, truncated note.
+                          Node data embedded as JSON with all "<" escaped to \u003c so no
+                          injected tag can break out of the script context. No external
+                          assets. Every dynamic value goes through escHtml() or \u003c
+                          escaping — verified by explicit XSS tests.
   test/
-    webview.test.ts     7 tests: HTML-escaping (incl. a malicious repo-root path and
-                          impact-table values), empty states, CSP presence.
+    webview.test.ts     16 tests: HTML-escaping (incl. malicious node name/file_path in
+                          graph state — XSS via embedded JSON), graph SVG rendering (node
+                          count, edge lines, truncated note), nav bar presence, first-run
+                          state, CSP presence, escHtml export.
     rpc.integration.test.ts  2 tests: spawns the REAL python -m repoflare_core.rpc via
                           the actual RepoFlareRpcClient — init/analyze/status roundtrip,
                           and JSON-RPC error codes (-32002, -32003) round-tripping
@@ -211,8 +218,8 @@ extension/
   dist/                 esbuild output (gitignored): extension.js + extension.js.map
 ```
 
-Verified: `cd extension && npm install && npm run build` → clean, 23 KB bundle.
-`npm run typecheck` (src + test) → zero type errors (strict mode). `npm test` → 9/9 passing,
+Verified: `cd extension && npm install && npm run build` → clean, 33 KB bundle.
+`npm run typecheck` (src + test) → zero type errors (strict mode). `npm test` → 16/16 passing,
 including both real subprocess integration tests.
 
 ## Conventions in force — match these, don't introduce new patterns
@@ -257,28 +264,34 @@ what's actually left.
    `parsing/resolver.py`'s module docstring for exactly what's already covered.
 
 2. ~~**`cache/` — CacheProvider.**~~ Done — see `cache/provider.py` and "Current state"
-   above. Cache key is `stable_id(change_set_id, context_id)`; hits skip the AI provider
-   call entirely; misses call the provider and write back. TTL optional (no TTL = permanent).
+   above. Cache key is `stable_id(prompt text)`; hits skip the AI provider call entirely;
+   misses call the provider and write back. TTL optional (no TTL = permanent).
 
 3. ~~**`extension/` — VS Code extension shell.**~~ Done — Bob IDE built this; see "Current
-   state" above and `extension/` tree below. Reviewed and lightly fixed afterward (not by
-   Bob): the "← Back to overview" button was a real bug — it posted a `ready` message
-   (handled as a no-op) and called `location.reload()`, which just re-rendered the current
-   impact HTML instead of returning to the overview. Fixed with a proper `back` message
-   type. Also removed an unused `EventEmitter` import in `rpc.ts`, and added a test suite
-   that didn't exist yet (`extension/test/`, `npm test`): 7 unit tests for
-   `webview.ts`'s HTML building — including explicit XSS-escaping checks on every dynamic
-   value (labels, file paths, refs, error messages, a maliciously-crafted repo root path) —
-   plus 2 real cross-language integration tests that spawn the actual
-   `python -m repoflare_core.rpc` subprocess through the real `RepoFlareRpcClient` (not
-   mocked on either side), proving the TS client and Python server genuinely agree on the
-   wire protocol, including that JSON-RPC error codes round-trip correctly end to end.
+   state" above and `extension/` tree. Extended this session with graph view, nav bar, and
+   first-run state (see items 5 and 6 below).
 
 4. ~~**`repoflare export-html`**~~ Done — see `export/html.py` and "Current state" above.
    Real report generated and hand-inspected in a throwaway repo: valid, self-contained
    HTML, no external assets, ready to host as-is (e.g. GitHub Pages) for the hackathon's
    required Demo Application URL field. **You still need to actually host it and paste that
    URL into the submission form** — this only produces the file.
+
+5. ~~**Dependency graph view**~~ Done — see "Current state" above.
+   `GraphStore.all_nodes(limit)` (degree-ordered) + `GraphStore.edges_among(node_ids)` in
+   `graph/store.py`; `GraphNode/GraphEdge/GraphOverview` + `run_graph_overview()` in
+   `service.py`; `repoflare/graph` RPC method in `rpc/server.py`;
+   `graphOverview()` + typed interfaces in `rpc.ts`; `repoflare.showGraph` command in
+   `extension.ts` + `package.json`; `graph` PanelState + deterministic two-ring circular
+   SVG layout + colored-by-kind nodes + click-to-detail in `webview.ts`; `showGraph()`
+   static method + `nav-graph`/`nav-impact` message handlers in `panel.ts`. Node data
+   embedded as JSON with `<` → `\u003c` to prevent XSS via script tag injection.
+   13 new tests: 4 graph_store, 4 service, 1 rpc_server, 7 webview (incl. XSS in JSON blob).
+
+6. ~~**UI polish (Part 2)**~~ Done — `rich>=13.0.0` added to `pyproject.toml`; `status`
+   command renders a plain two-column `rich.Table` for node/edge counts; `impact` command
+   prints each category label in a distinct color (red/yellow/blue/green). Nav bar always
+   visible in all webview states. Friendly first-run state in overview when not yet analyzed.
 
 Only one item left: item 1 (CALLS/IMPORTS extension) above.
 

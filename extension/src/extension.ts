@@ -24,6 +24,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("repoflare.showImpact", () =>
       withClient(context, (client, root) => promptAndShowImpact(context, client, root))
+    ),
+    vscode.commands.registerCommand("repoflare.showGraph", () =>
+      withClient(context, (client, root) => RepoFlarePanel.showGraph(context, client, root))
     )
   );
 }

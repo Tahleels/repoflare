@@ -6,7 +6,7 @@
  * A small amount of inline JS handles the Analyze button and the impact-ref form.
  */
 
-import { StatusResult, ImpactSummary } from "./rpc";
+import { StatusResult, ImpactSummary, GraphOverview, GraphNode } from "./rpc";
 
 // ── State union for the renderer ──────────────────────────────────────────────
 
@@ -14,7 +14,8 @@ type PanelState =
   | { state: "loading" }
   | { state: "error"; message: string }
   | { state: "overview"; status: StatusResult; root: string }
-  | { state: "impact"; status: StatusResult; root: string; from: string; to: string; impact: ImpactSummary };
+  | { state: "impact"; status: StatusResult; root: string; from: string; to: string; impact: ImpactSummary }
+  | { state: "graph"; graph: GraphOverview; total_node_count: number };
 
 // ── Entry point ────────────────────────────────────────────────────────────────
 
@@ -30,8 +31,9 @@ ${styles()}
 </head>
 <body>
 ${header()}
+${nav(state.state)}
 ${body(state)}
-${script()}
+${script(state)}
 </body>
 </html>`;
 }
@@ -122,13 +124,65 @@ function styles(): string {
   .changed-list { padding-left: 18px; margin: 4px 0 12px; }
   .changed-list li { font-family: monospace; font-size: 0.88em; margin-bottom: 2px; }
   .empty-state { color: var(--vscode-descriptionForeground); padding: 16px 0; font-style: italic; }
+  .first-run {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    padding: 20px 24px;
+    margin-top: var(--gap);
+    background: var(--vscode-editor-inactiveSelectionBackground);
+  }
+  .first-run p { margin: 0 0 12px; }
+  /* Nav bar */
+  .nav {
+    display: flex;
+    gap: 2px;
+    margin-bottom: var(--gap);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    padding-bottom: 8px;
+  }
+  .nav button {
+    background: none;
+    color: var(--vscode-foreground);
+    border: none;
+    border-radius: 4px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 0.88em;
+    opacity: 0.7;
+  }
+  .nav button:hover { background: var(--vscode-toolbar-hoverBackground); opacity: 1; }
+  .nav button.active { opacity: 1; font-weight: 600; background: var(--vscode-toolbar-activeBackground); }
+  /* Graph SVG */
+  .graph-wrap {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    margin-bottom: var(--gap);
+  }
+  .graph-wrap svg { display: block; width: 100%; }
+  .graph-note { font-size: 0.82em; color: var(--vscode-descriptionForeground); margin-bottom: 8px; }
+  .node-detail {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 0.88em;
+    min-height: 36px;
+    background: var(--vscode-editor-inactiveSelectionBackground);
+  }
+  .node-detail .detail-label { font-weight: 600; margin-bottom: 2px; }
+  .node-detail .detail-path { font-family: monospace; color: var(--vscode-textLink-foreground); }
+  /* Legend */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 0.82em; }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
 </style>`;
 }
 
 // ── Header strip ──────────────────────────────────────────────────────────────
 
 function header(): string {
-  return `<div style="display:flex;align-items:center;margin-bottom:var(--gap)">
+  return `<div style="display:flex;align-items:center;margin-bottom:8px">
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="margin-right:10px">
     <circle cx="12" cy="12" r="11" stroke="var(--vscode-foreground)" stroke-width="1.5"/>
     <circle cx="12" cy="12" r="4" fill="var(--vscode-foreground)"/>
@@ -139,6 +193,21 @@ function header(): string {
   </svg>
   <div><h1>RepoFlare</h1><div class="muted">Repository intelligence</div></div>
 </div>`;
+}
+
+// ── Nav bar ───────────────────────────────────────────────────────────────────
+
+function nav(active: string): string {
+  const btn = (id: string, label: string, msg: string) => {
+    const cls = active === id ? " active" : "";
+    return `<button class="${cls}" data-msg="${escHtml(msg)}">${label}</button>`;
+  };
+  return `<nav class="nav" id="nav-bar">
+  ${btn("overview", "Overview", "back")}
+  ${btn("overview", "Analyze", "analyze")}
+  ${btn("impact", "Impact", "nav-impact")}
+  ${btn("graph", "Graph", "nav-graph")}
+</nav>`;
 }
 
 // ── Body dispatch ─────────────────────────────────────────────────────────────
@@ -153,15 +222,24 @@ function body(state: PanelState): string {
       return overviewBody(state.status, state.root);
     case "impact":
       return impactBody(state.status, state.root, state.from, state.to, state.impact);
+    case "graph":
+      return graphBody(state.graph);
   }
 }
 
 // ── Overview view ─────────────────────────────────────────────────────────────
 
 function overviewBody(status: StatusResult, root: string): string {
-  const snapLine = status.snapshot_id
-    ? `<span class="snap-id">${escHtml(status.snapshot_id)}</span>`
-    : `<span class="muted">not yet analyzed</span>`;
+  if (!status.snapshot_id) {
+    return `
+<div class="muted" style="margin-bottom:var(--gap)">${escHtml(root)}</div>
+<div class="first-run">
+  <p>This repository hasn't been analyzed yet. Run <strong>Analyze</strong> to build the dependency graph — it scans every Python/TypeScript/JavaScript file and extracts symbols, calls, and imports.</p>
+  <button class="action" id="btn-analyze">Analyze repository</button>
+</div>`;
+  }
+
+  const snapLine = `<span class="snap-id">${escHtml(status.snapshot_id)}</span>`;
 
   return `
 <div class="muted" style="margin-bottom:var(--gap)">${escHtml(root)}</div>
@@ -176,7 +254,7 @@ function overviewBody(status: StatusResult, root: string): string {
 
 <h2>Actions</h2>
 <div style="margin-bottom:var(--gap)">
-  <button class="action" id="btn-analyze">Analyze repository</button>
+  <button class="action" id="btn-analyze">Re-analyze repository</button>
 </div>
 
 <h2>Impact</h2>
@@ -267,9 +345,170 @@ function impactTable(impact: ImpactSummary): string {
 </table>`;
 }
 
+// ── Graph view ────────────────────────────────────────────────────────────────
+
+// Node colors by kind — chosen for distinctness against both light and dark VS Code themes.
+const NODE_COLOR: Record<string, string> = {
+  FILE:     "#4a7bc4",   // blue
+  SYMBOL:   "#5a9e6f",   // green
+  TEST:     "#c47a3a",   // amber
+  MODULE:   "#7c5cd8",   // purple
+  API_ENDPOINT:    "#c45a7c",   // rose
+  CONFIG_ITEM:     "#4a9e9e",   // teal
+  EXTERNAL_SERVICE:"#9e7c4a",   // tan
+};
+const NODE_COLOR_DEFAULT = "#888";
+
+const SVG_W = 720;
+const SVG_H = 480;
+const NODE_R = 9;   // circle radius for non-FILE nodes
+const FILE_HALF = 11; // half-size for FILE rectangles
+
+/** Pure deterministic circular layout: evenly spaced around a circle. */
+function layoutNodes(nodes: GraphNode[]): Array<{ x: number; y: number }> {
+  const n = nodes.length;
+  if (n === 0) return [];
+  if (n === 1) return [{ x: SVG_W / 2, y: SVG_H / 2 }];
+
+  // Use concentric rings when there are many nodes: inner ring up to 16, outer ring the rest.
+  // All arithmetic is deterministic (index-based), no random.
+  const cx = SVG_W / 2;
+  const cy = SVG_H / 2;
+  const positions: Array<{ x: number; y: number }> = [];
+
+  if (n <= 24) {
+    // Single ring
+    const r = Math.min(SVG_W, SVG_H) / 2 - 40;
+    for (let i = 0; i < n; i++) {
+      const angle = (2 * Math.PI * i) / n - Math.PI / 2;
+      positions.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+    }
+  } else {
+    // Two rings: inner holds ~1/3, outer holds the rest
+    const innerCount = Math.max(8, Math.floor(n / 3));
+    const outerCount = n - innerCount;
+    const rInner = Math.min(SVG_W, SVG_H) / 2 - 100;
+    const rOuter = Math.min(SVG_W, SVG_H) / 2 - 40;
+    for (let i = 0; i < innerCount; i++) {
+      const angle = (2 * Math.PI * i) / innerCount - Math.PI / 2;
+      positions.push({ x: cx + rInner * Math.cos(angle), y: cy + rInner * Math.sin(angle) });
+    }
+    for (let i = 0; i < outerCount; i++) {
+      const angle = (2 * Math.PI * i) / outerCount - Math.PI / 2;
+      positions.push({ x: cx + rOuter * Math.cos(angle), y: cy + rOuter * Math.sin(angle) });
+    }
+  }
+  return positions;
+}
+
+function graphBody(graph: GraphOverview): string {
+  const { nodes, edges, truncated, total_node_count } = graph;
+
+  const truncNote = truncated
+    ? `<div class="graph-note">Showing the ${escHtml(String(nodes.length))} most-connected nodes out of ${escHtml(String(total_node_count))} — not the full graph.</div>`
+    : "";
+
+  const legend = `<div class="legend">
+  ${Object.entries(NODE_COLOR).map(([kind, color]) =>
+    `<div class="legend-item"><div class="legend-swatch" style="background:${escHtml(color)}"></div><span>${escHtml(kind)}</span></div>`
+  ).join("")}
+</div>`;
+
+  if (nodes.length === 0) {
+    return `<div class="empty-state">No nodes in the current snapshot. Run <strong>Analyze</strong> first.</div>`;
+  }
+
+  const positions = layoutNodes(nodes);
+
+  // Build a node_id → index map for fast edge lookup
+  const idxById: Record<string, number> = {};
+  nodes.forEach((n, i) => { idxById[n.node_id] = i; });
+
+  // SVG edges (lines drawn before nodes so nodes sit on top)
+  const edgeLines = edges.map((e) => {
+    const si = idxById[e.src_node_id];
+    const di = idxById[e.dst_node_id];
+    if (si === undefined || di === undefined) return "";
+    const s = positions[si];
+    const d = positions[di];
+    return `<line x1="${s.x.toFixed(1)}" y1="${s.y.toFixed(1)}" x2="${d.x.toFixed(1)}" y2="${d.y.toFixed(1)}" stroke="var(--vscode-panel-border)" stroke-width="1" opacity="0.6"/>`;
+  }).join("");
+
+  // SVG nodes
+  const nodeShapes = nodes.map((n, i) => {
+    const { x, y } = positions[i];
+    const color = NODE_COLOR[n.kind] ?? NODE_COLOR_DEFAULT;
+    const label = escHtml(n.name.length > 14 ? n.name.slice(0, 13) + "…" : n.name);
+    const title = escHtml(`${n.name} (${n.kind})${n.file_path ? "\n" + n.file_path : ""}`);
+
+    // FILE nodes: rounded rectangle; all others: circle
+    let shape: string;
+    if (n.kind === "FILE") {
+      const rx = (x - FILE_HALF).toFixed(1);
+      const ry = (y - FILE_HALF * 0.75).toFixed(1);
+      shape = `<rect x="${rx}" y="${ry}" width="${(FILE_HALF * 2).toFixed(1)}" height="${(FILE_HALF * 1.5).toFixed(1)}" rx="3" fill="${escHtml(color)}" class="graph-node" data-idx="${i}"/>`;
+    } else {
+      shape = `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${NODE_R}" fill="${escHtml(color)}" class="graph-node" data-idx="${i}"/>`;
+    }
+
+    // Small text label below the node
+    const labelY = (y + NODE_R + 11).toFixed(1);
+    const textEl = `<text x="${x.toFixed(1)}" y="${labelY}" text-anchor="middle" font-size="9" fill="var(--vscode-descriptionForeground)" pointer-events="none">${label}</text>`;
+
+    return `<g><title>${title}</title>${shape}${textEl}</g>`;
+  }).join("");
+
+  const svg = `<svg viewBox="0 0 ${SVG_W} ${SVG_H}" xmlns="http://www.w3.org/2000/svg" id="graph-svg">
+  <style>
+    .graph-node { cursor: pointer; transition: opacity 0.1s; }
+    .graph-node:hover { opacity: 0.75; }
+  </style>
+  ${edgeLines}
+  ${nodeShapes}
+</svg>`;
+
+  // Embed node data for the click handler as a JSON blob.  The JSON goes verbatim inside a
+  // <script> tag — escape ALL "<" to "\u003c" so no injected HTML tag (opening or closing,
+  // including "</script>") can break out of the script context.  \u003c is valid JSON.
+  const nodeDataJson = JSON.stringify(
+    nodes.map((n) => ({
+      name: n.name,
+      kind: n.kind,
+      file_path: n.file_path ?? "",
+    }))
+  ).replace(/</g, "\\u003c");
+
+  return `
+${truncNote}
+${legend}
+<h2>Dependency graph</h2>
+<div class="graph-wrap">${svg}</div>
+<div class="node-detail" id="node-detail">
+  <span class="muted">Click a node to see details.</span>
+</div>
+<script>
+(function() {
+  var nodes = ${nodeDataJson};
+  var detail = document.getElementById('node-detail');
+  document.getElementById('graph-svg').addEventListener('click', function(e) {
+    var el = e.target.closest('.graph-node');
+    if (!el) return;
+    var idx = parseInt(el.getAttribute('data-idx'), 10);
+    var n = nodes[idx];
+    if (!n) return;
+    var fp = n.file_path ? '<div class="detail-path">' + n.file_path.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' : '';
+    detail.innerHTML = '<div class="detail-label">' + n.name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div><div class="muted">' + n.kind + '</div>' + fp;
+  });
+}());
+</script>
+`;
+}
+
 // ── Inline script ──────────────────────────────────────────────────────────────
 
-function script(): string {
+function script(state: PanelState): string {
+  // The graph state inlines its own click handler above; skip the global script for it
+  // (the nav buttons still need to be wired though — handled via the nav section below).
   return `<script>
   (function () {
     const vscode = acquireVsCodeApi();
@@ -278,6 +517,20 @@ function script(): string {
       const el = document.getElementById(id);
       if (el) el.addEventListener('click', handler);
     }
+
+    // Nav bar — each button carries its message type as data-msg
+    document.querySelectorAll('#nav-bar button[data-msg]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var msg = btn.getAttribute('data-msg');
+        if (msg === 'nav-impact') {
+          vscode.postMessage({ type: 'nav-impact' });
+        } else if (msg === 'nav-graph') {
+          vscode.postMessage({ type: 'nav-graph' });
+        } else {
+          vscode.postMessage({ type: msg });
+        }
+      });
+    });
 
     on('btn-analyze', function () {
       vscode.postMessage({ type: 'analyze' });
@@ -301,7 +554,7 @@ function script(): string {
 
 // ── Utility ────────────────────────────────────────────────────────────────────
 
-function escHtml(s: string): string {
+export function escHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

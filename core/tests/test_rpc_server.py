@@ -179,3 +179,25 @@ def test_serve_forever_processes_stream_and_stops_at_eof(tmp_path: Path) -> None
     assert response is not None
     assert response["id"] == 1
     assert "error" not in response
+
+
+def test_graph_overview_over_rpc(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def helper():\n    pass\n\ndef entry():\n    helper()\n")
+    server = RpcServer()
+    server.handle_request({"id": 1, "method": "repoflare/init", "params": {"path": str(tmp_path)}})
+    server.handle_request(
+        {"id": 2, "method": "repoflare/analyze", "params": {"path": str(tmp_path)}}
+    )
+
+    response = server.handle_request(
+        {"id": 3, "method": "repoflare/graph", "params": {"path": str(tmp_path)}}
+    )
+
+    assert response is not None
+    assert "error" not in response
+    result = response["result"]
+    assert isinstance(result["nodes"], list)
+    assert isinstance(result["edges"], list)
+    assert isinstance(result["truncated"], bool)
+    assert result["truncated"] is False
+    assert len(result["nodes"]) >= 1

@@ -266,3 +266,121 @@ def test_nodes_for_file_returns_matching_nodes(tmp_path: Path) -> None:
     assert {n.node_id for n in a_nodes} == {"f1", "s1"}
     assert {n.node_id for n in b_nodes} == {"f2"}
     assert c_nodes == []
+
+
+def _repo_and_snapshot(store: GraphStore, snap_id: str = "snap1") -> None:
+    """Helper: insert a minimal repository + snapshot so FK constraints are satisfied."""
+    from datetime import UTC, datetime
+
+    from repoflare_core.domain.entities import Repository, Snapshot
+
+    store.upsert_repository(
+        Repository(repository_id="repo1", root_path="/r", name="r", created_at=datetime.now(UTC))
+    )
+    store.create_snapshot(
+        Snapshot(
+            snapshot_id=snap_id,
+            repository_id="repo1",
+            git_commit_sha=None,
+            created_at=datetime.now(UTC),
+        )
+    )
+
+
+def test_all_nodes_respects_limit(tmp_path: Path) -> None:
+    with GraphStore(tmp_path / "g.duckdb") as store:
+        _repo_and_snapshot(store)
+        nodes = [
+            Node(node_id=f"n{i}", snapshot_id="snap1", kind=NodeKind.SYMBOL, name=f"sym{i}")
+            for i in range(5)
+        ]
+        store.insert_nodes(nodes)
+
+        result = store.all_nodes("snap1", limit=3)
+
+    assert len(result) == 3
+
+
+def test_all_nodes_orders_by_degree_highest_first(tmp_path: Path) -> None:
+    """Node 'hub' is connected to all others; it must appear first in the limited view."""
+    with GraphStore(tmp_path / "g.duckdb") as store:
+        _repo_and_snapshot(store)
+        store.insert_nodes(
+            [
+                Node(node_id="hub", snapshot_id="snap1", kind=NodeKind.SYMBOL, name="hub"),
+                Node(node_id="a", snapshot_id="snap1", kind=NodeKind.SYMBOL, name="a"),
+                Node(node_id="b", snapshot_id="snap1", kind=NodeKind.SYMBOL, name="b"),
+                Node(node_id="c", snapshot_id="snap1", kind=NodeKind.SYMBOL, name="c"),
+            ]
+        )
+        store.insert_edges(
+            [
+                Edge(
+                    edge_id="e1",
+                    snapshot_id="snap1",
+                    src_node_id="a",
+                    dst_node_id="hub",
+                    edge_type=EdgeType.CALLS,
+                ),
+                Edge(
+                    edge_id="e2",
+                    snapshot_id="snap1",
+                    src_node_id="b",
+                    dst_node_id="hub",
+                    edge_type=EdgeType.CALLS,
+                ),
+                Edge(
+                    edge_id="e3",
+                    snapshot_id="snap1",
+                    src_node_id="c",
+                    dst_node_id="hub",
+                    edge_type=EdgeType.CALLS,
+                ),
+            ]
+        )
+
+        result = store.all_nodes("snap1", limit=4)
+
+    assert result[0].node_id == "hub"
+
+
+def test_edges_among_only_returns_internal_edges(tmp_path: Path) -> None:
+    """edges_among must exclude edges where one endpoint is outside the given set."""
+    with GraphStore(tmp_path / "g.duckdb") as store:
+        _repo_and_snapshot(store)
+        store.insert_nodes(
+            [
+                Node(node_id="a", snapshot_id="snap1", kind=NodeKind.SYMBOL, name="a"),
+                Node(node_id="b", snapshot_id="snap1", kind=NodeKind.SYMBOL, name="b"),
+                Node(node_id="c", snapshot_id="snap1", kind=NodeKind.SYMBOL, name="c"),
+            ]
+        )
+        store.insert_edges(
+            [
+                Edge(
+                    edge_id="ab",
+                    snapshot_id="snap1",
+                    src_node_id="a",
+                    dst_node_id="b",
+                    edge_type=EdgeType.CALLS,
+                ),
+                Edge(
+                    edge_id="ac",
+                    snapshot_id="snap1",
+                    src_node_id="a",
+                    dst_node_id="c",
+                    edge_type=EdgeType.CALLS,
+                ),
+            ]
+        )
+
+        # Only ask for nodes a and b — edge ac must not appear
+        result = store.edges_among("snap1", ["a", "b"])
+
+    assert len(result) == 1
+    assert result[0].edge_id == "ab"
+
+
+def test_edges_among_empty_node_list_returns_empty(tmp_path: Path) -> None:
+    with GraphStore(tmp_path / "g.duckdb") as store:
+        assert store.edges_among("snap1", []) == []

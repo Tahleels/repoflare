@@ -12,6 +12,7 @@ from repoflare_core.service import (
     NotInitializedError,
     run_analyze,
     run_explain,
+    run_graph_overview,
     run_impact,
     run_init,
     run_status,
@@ -104,3 +105,43 @@ def test_run_explain_no_changes_returns_none(tmp_path: Path) -> None:
     run_analyze(repo)
 
     assert run_explain(repo, from_ref=sha, to_ref=sha) is None
+
+
+def test_run_graph_overview_basic(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def helper():\n    pass\n\ndef entry():\n    helper()\n")
+    run_init(tmp_path)
+    run_analyze(tmp_path)
+
+    result = run_graph_overview(tmp_path)
+
+    assert len(result.nodes) >= 1
+    assert result.truncated is False
+    assert result.total_node_count == len(result.nodes)
+    node_kinds = {n.kind for n in result.nodes}
+    assert "FILE" in node_kinds or "SYMBOL" in node_kinds
+
+
+def test_run_graph_overview_truncated_flag(tmp_path: Path) -> None:
+    """When max_nodes is smaller than the real node count, truncated must be True."""
+    (tmp_path / "a.py").write_text(
+        "def f():\n    pass\n\ndef g():\n    pass\n\ndef h():\n    pass\n"
+    )
+    run_init(tmp_path)
+    run_analyze(tmp_path)
+
+    result = run_graph_overview(tmp_path, max_nodes=2)
+
+    assert result.truncated is True
+    assert len(result.nodes) == 2
+    assert result.total_node_count > 2
+
+
+def test_run_graph_overview_before_analyze_raises(tmp_path: Path) -> None:
+    run_init(tmp_path)
+    with pytest.raises(NotAnalyzedError):
+        run_graph_overview(tmp_path)
+
+
+def test_run_graph_overview_before_init_raises(tmp_path: Path) -> None:
+    with pytest.raises(NotInitializedError):
+        run_graph_overview(tmp_path)

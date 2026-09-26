@@ -25,7 +25,9 @@ type WebviewMessage =
   | { type: "analyze" }
   | { type: "impact"; from: string; to: string }
   | { type: "back" }
-  | { type: "ready" };
+  | { type: "ready" }
+  | { type: "nav-graph" }
+  | { type: "nav-impact" };
 
 export class RepoFlarePanel {
   private static _current: RepoFlarePanel | undefined;
@@ -87,6 +89,32 @@ export class RepoFlarePanel {
     await RepoFlarePanel._current._initialLoad(impactRequest);
   }
 
+  /** Open the panel directly on the graph view. */
+  static async showGraph(
+    context: vscode.ExtensionContext,
+    client: RepoFlareRpcClient,
+    root: string
+  ): Promise<void> {
+    const column = vscode.window.activeTextEditor
+      ? vscode.window.activeTextEditor.viewColumn
+      : vscode.ViewColumn.One;
+
+    if (RepoFlarePanel._current) {
+      RepoFlarePanel._current._panel.reveal(column);
+      await RepoFlarePanel._current._showGraphView();
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      "repoflare",
+      "RepoFlare",
+      column ?? vscode.ViewColumn.One,
+      { enableScripts: true, localResourceRoots: [], retainContextWhenHidden: true }
+    );
+    RepoFlarePanel._current = new RepoFlarePanel(panel, context, client, root);
+    await RepoFlarePanel._current._showGraphView();
+  }
+
   // ── Private ─────────────────────────────────────────────────────────────────
 
   private async _initialLoad(impactRequest: ImpactRequest | null): Promise<void> {
@@ -132,6 +160,28 @@ export class RepoFlarePanel {
     }
   }
 
+  private async _showGraphView(): Promise<void> {
+    this._panel.webview.html = buildWebviewHtml({ state: "loading" });
+    try {
+      const graph = await this._client.graphOverview(this._root);
+      this._panel.webview.html = buildWebviewHtml({
+        state: "graph",
+        graph,
+        total_node_count: graph.total_node_count,
+      });
+    } catch (err) {
+      if (err instanceof RpcError) {
+        this._panel.webview.html = buildWebviewHtml({
+          state: "error",
+          message: `${err.message} (code ${err.code})`,
+        });
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        this._panel.webview.html = buildWebviewHtml({ state: "error", message });
+      }
+    }
+  }
+
   private async _handleMessage(msg: WebviewMessage): Promise<void> {
     switch (msg.type) {
       case "ready":
@@ -159,6 +209,15 @@ export class RepoFlarePanel {
         break;
 
       case "back":
+        await this._showOverview();
+        break;
+
+      case "nav-graph":
+        await this._showGraphView();
+        break;
+
+      case "nav-impact":
+        // Open the impact form — navigate to overview (which has the impact form built in).
         await this._showOverview();
         break;
     }

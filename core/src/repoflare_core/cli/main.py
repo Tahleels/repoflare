@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 
 import typer
+from rich.console import Console
+from rich.table import Table
 
 from repoflare_core.ai.factory import BobProviderConfigError
 from repoflare_core.ai.provider import BobProviderError
@@ -51,6 +53,19 @@ _EXPORT_FROM_OPT = typer.Option(
 _EXPORT_OUTPUT_OPT = typer.Option(
     None, "--output", "-o", help="Output file. Defaults to <repo>/.repoflare/report.html."
 )
+
+# Console shared by all commands — highlight=False keeps output deterministic in tests
+# (rich auto-disables markup when stdout isn't a real TTY, so test assertions on plain
+# text strings remain unaffected regardless of this setting).
+_console = Console(highlight=False)
+
+# Impact category → rich color (used in `impact` output only).
+_CATEGORY_COLOR = {
+    "DIRECT": "bold red",
+    "INDIRECT": "bold yellow",
+    "RELATED": "bold blue",
+    "POSSIBLE": "bold green",
+}
 
 
 @app.command()
@@ -99,7 +114,14 @@ def status(path: Path = _REPO_ROOT_ARG) -> None:
 
     typer.echo(f"Repository: {root}")
     typer.echo(f"Current snapshot: {result.snapshot_id}")
-    typer.echo(f"Nodes: {result.node_count}, Edges: {result.edge_count}")
+
+    # Rich table for the counts — plain two-column layout, no decoration.
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2, 0, 0))
+    table.add_column("Metric")
+    table.add_column("Count", justify="right")
+    table.add_row("Nodes", str(result.node_count))
+    table.add_row("Edges", str(result.edge_count))
+    _console.print(table)
 
 
 @app.command()
@@ -133,7 +155,10 @@ def impact(
 
     category_order = {c.value: i for i, c in enumerate(type(summary.results[0].category))}
     for result in sorted(summary.results, key=lambda r: category_order[r.category.value]):
-        typer.echo(f"{result.category.value} ({len(result.affected_node_ids)}):")
+        color = _CATEGORY_COLOR.get(result.category.value, "bold")
+        _console.print(
+            f"[{color}]{result.category.value}[/{color}] ({len(result.affected_node_ids)}):"
+        )
         for node_id in result.affected_node_ids:
             node_summary = summary.node_summaries[node_id]
             location = f" ({node_summary.file_path})" if node_summary.file_path else ""
@@ -185,7 +210,7 @@ def export_html(
     CLI already computes, meant to be hosted as a plain static file."""
     root = path.resolve()
     try:
-        status = run_status(root)
+        status_result = run_status(root)
     except NotInitializedError:
         typer.echo("error: not initialized — run 'repoflare init' first", err=True)
         raise typer.Exit(code=1) from None
@@ -203,7 +228,7 @@ def export_html(
             typer.echo(f"error: {exc}", err=True)
             raise typer.Exit(code=1) from exc
 
-    html = render_html(str(root), status, impact_summary, impact_refs)
+    html = render_html(str(root), status_result, impact_summary, impact_refs)
 
     output_path = output if output is not None else root / ".repoflare" / "report.html"
     output_path.parent.mkdir(parents=True, exist_ok=True)

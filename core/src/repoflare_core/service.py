@@ -10,7 +10,7 @@ objects).
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -240,6 +240,61 @@ def run_impact(root: Path, from_ref: str, to_ref: str = "HEAD") -> ImpactSummary
 
     return ImpactSummary(
         changed_files=change_set.changed_files, results=results, node_summaries=node_summaries
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class GraphNode:
+    node_id: str
+    kind: str
+    name: str
+    file_path: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GraphEdge:
+    src_node_id: str
+    dst_node_id: str
+    edge_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class GraphOverview:
+    nodes: list[GraphNode] = field(default_factory=list)
+    edges: list[GraphEdge] = field(default_factory=list)
+    truncated: bool = False
+    total_node_count: int = 0
+
+
+def run_graph_overview(root: Path, max_nodes: int = 150) -> GraphOverview:
+    """Raises NotInitializedError/NotAnalyzedError like run_impact."""
+    db_path = graph_db_path(root)
+    if not db_path.exists():
+        raise NotInitializedError(str(root))
+
+    with GraphStore(db_path) as store:
+        snapshot_id = store.current_snapshot_id(repository_id(root))
+        if snapshot_id is None:
+            raise NotAnalyzedError(str(root))
+
+        total_node_count = _count(store, "nodes", snapshot_id)
+        raw_nodes = store.all_nodes(snapshot_id, max_nodes)
+        node_ids = [n.node_id for n in raw_nodes]
+        raw_edges = store.edges_among(snapshot_id, node_ids)
+
+    nodes = [
+        GraphNode(node_id=n.node_id, kind=n.kind.value, name=n.name, file_path=n.file_path)
+        for n in raw_nodes
+    ]
+    edges = [
+        GraphEdge(src_node_id=e.src_node_id, dst_node_id=e.dst_node_id, edge_type=e.edge_type.value)
+        for e in raw_edges
+    ]
+    return GraphOverview(
+        nodes=nodes,
+        edges=edges,
+        truncated=total_node_count > max_nodes,
+        total_node_count=total_node_count,
     )
 
 

@@ -27,6 +27,10 @@
       {
         "command": "repoflare.showImpact",
         "title": "RepoFlare: Show Impact for Ref Range…"
+      },
+      {
+        "command": "repoflare.showGraph",
+        "title": "RepoFlare: Show Dependency Graph"
       }
     ],
     "configuration": {

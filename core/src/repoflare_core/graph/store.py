@@ -214,6 +214,70 @@ class GraphStore:
             ],
         )
 
+    def all_nodes(self, snapshot_id: str, limit: int) -> list[Node]:
+        """Return up to `limit` nodes ordered by degree (fan-in + fan-out, highest first).
+
+        Degree ordering ensures a truncated view still shows the most-connected, most-
+        interesting nodes rather than an arbitrary slice — important because the graph view
+        caps at 150 nodes by default on large repositories.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT n.node_id, n.snapshot_id, n.kind, n.name, n.qualified_name, n.file_path,
+                   n.start_line, n.end_line, n.content_hash, n.properties
+            FROM nodes n
+            LEFT JOIN (
+                SELECT node_id, count(*) AS degree FROM (
+                    SELECT src_node_id AS node_id FROM edges WHERE snapshot_id = ?
+                    UNION ALL
+                    SELECT dst_node_id AS node_id FROM edges WHERE snapshot_id = ?
+                ) combined GROUP BY node_id
+            ) d ON n.node_id = d.node_id
+            WHERE n.snapshot_id = ?
+            ORDER BY COALESCE(d.degree, 0) DESC
+            LIMIT ?
+            """,
+            [snapshot_id, snapshot_id, snapshot_id, limit],
+        ).fetchall()
+        return [self._row_to_node(r) for r in rows]
+
+    def edges_among(self, snapshot_id: str, node_ids: list[str]) -> list[Edge]:
+        """Return edges where both src_node_id and dst_node_id are in node_ids.
+
+        Only edges with both endpoints in the given set are returned, so callers can safely
+        render the edges without needing to check for dangling references.
+        """
+        if not node_ids:
+            return []
+        # Build a VALUES table inline — no temp table needed, and DuckDB handles the IN
+        # list efficiently on typical graph sizes (≤150 node ids after the cap applied in
+        # all_nodes).
+        placeholders = ", ".join("?" for _ in node_ids)
+        rows = self._conn.execute(
+            f"""
+            SELECT edge_id, snapshot_id, src_node_id, dst_node_id, edge_type, properties
+            FROM edges
+            WHERE snapshot_id = ?
+              AND src_node_id IN ({placeholders})
+              AND dst_node_id IN ({placeholders})
+            """,
+            [snapshot_id, *node_ids, *node_ids],
+        ).fetchall()
+        return [self._row_to_edge(r) for r in rows]
+
+    @staticmethod
+    def _row_to_edge(row: tuple[Any, ...]) -> Edge:
+        from repoflare_core.domain.entities import EdgeType
+
+        return Edge(
+            edge_id=row[0],
+            snapshot_id=row[1],
+            src_node_id=row[2],
+            dst_node_id=row[3],
+            edge_type=EdgeType(row[4]),
+            properties=_load_properties(row[5]),
+        )
+
     def raw_connection(self) -> duckdb.DuckDBPyConnection:
         """Escape hatch for graph/traversal.py, which needs read-only ad-hoc queries
         (recursive CTEs) that don't warrant a dedicated method on this class."""
