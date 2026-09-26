@@ -6,6 +6,7 @@ extension over a shared Python core.
 
 - **What this is, in plain words:** `PROJECT_OVERVIEW.md`
 - **How to actually run it:** `HOW_TO_RUN.md`
+- **Step-by-step test walkthrough (CLI + extension):** `TESTING_GUIDE.md`
 - **Simple architecture breakdown:** `docs/ARCHITECTURE_SIMPLE.md`
 - Full architecture, data model, graph schema, decisions: `docs/`
 - Agent/contributor context (start here before changing code): `AGENTS.md`
