@@ -47,6 +47,18 @@ def test_scanned_file_carries_content_and_hash(tmp_path: Path) -> None:
     assert len(scanned.content_hash) == 64  # sha256 hex digest
 
 
+def test_bom_prefixed_file_is_stripped_before_returning_content(tmp_path: Path) -> None:
+    """Regression: Windows PowerShell's `Out-File -Encoding utf8` writes a UTF-8 BOM by
+    default. Left in place, it lands as an invisible character before the first line,
+    silently breaking tree-sitter's parse of that line (commonly the first import
+    statement) — see scanner.py's read_text call for the utf-8-sig fix."""
+    (tmp_path / "a.py").write_bytes(b"\xef\xbb\xbf" + b"x = 1\n")
+
+    [scanned] = list(RepositoryScanner(tmp_path).scan())
+
+    assert scanned.content == "x = 1\n"
+
+
 def test_empty_repo_yields_no_files(tmp_path: Path) -> None:
     files = list(RepositoryScanner(tmp_path).scan())
 

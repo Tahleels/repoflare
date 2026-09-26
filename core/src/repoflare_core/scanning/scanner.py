@@ -70,7 +70,13 @@ class RepositoryScanner:
             if language is None:
                 continue
             try:
-                content = path.read_text(encoding="utf-8")
+                # utf-8-sig transparently strips a leading BOM when present (e.g. files
+                # written by Windows PowerShell's `Out-File -Encoding utf8`, which defaults
+                # to BOM-prefixed UTF-8) and is otherwise identical to plain utf-8 — a BOM
+                # left in place lands as an invisible character before the first line,
+                # which silently breaks tree-sitter's parse of that line (commonly the
+                # first import statement).
+                content = path.read_text(encoding="utf-8-sig")
             except (UnicodeDecodeError, OSError):
                 continue
             yield ScannedFile(
