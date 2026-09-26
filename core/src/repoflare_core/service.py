@@ -9,11 +9,13 @@ objects).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from repoflare_core.ai.factory import default_bob_provider
+from repoflare_core.cache.provider import CacheProvider
 from repoflare_core.change.detector import ChangeDetector
 from repoflare_core.change.git_adapter import GitAdapter, GitCommandError
 from repoflare_core.config import graph_db_path
@@ -267,5 +269,16 @@ def run_explain(root: Path, from_ref: str, to_ref: str = "HEAD") -> str | None:
         results = ImpactAnalyzer(store, traversal).analyze(change_set)
         context = ContextRetriever(store, traversal).build_context(change_set, results, root)
 
+        cache = CacheProvider(store.raw_connection())
+        cache_key = stable_id(change_set.change_set_id, context.context_id)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return str(json.loads(cached)["text"])
+
     provider = default_bob_provider()
-    return provider.complete(format_explain_prompt(context))
+    explanation = provider.complete(format_explain_prompt(context))
+
+    with GraphStore(db_path) as store:
+        CacheProvider(store.raw_connection()).set(cache_key, {"text": explanation})
+
+    return explanation

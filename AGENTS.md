@@ -116,17 +116,28 @@ core/
                             contained static HTML report (repo overview + optional impact
                             view). Mirrors extension/src/webview.ts's escape-everything
                             discipline. Wired into the CLI as `export-html`.
+    cache/                  CacheProvider (provider.py) — content-hash-keyed result cache
+                            backed by the analysis_cache DuckDB table. get(key) returns
+                            cached JSON string or None (pruning expired entries on access);
+                            set(key, result, ttl) upserts. Takes the raw DuckDB connection
+                            from GraphStore.raw_connection() — no second connection opened.
+                            Wired into service.py::run_explain: cache key is
+                            stable_id(change_set_id, context_id); hit → return immediately
+                            without calling the AI provider; miss → call provider, write
+                            result back, return. 10 tests in test_cache_provider.py cover
+                            get/set roundtrip, overwrite, TTL, expiry pruning, and the
+                            cache-hit short-circuit in run_explain end-to-end.
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    158 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    168 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_test_resolver, test_graph_store,
                             test_traversal, test_change_detector, test_impact_analyzer,
                             test_ai_providers, test_ai_factory, test_context_retriever,
                             test_service, test_rpc_protocol, test_rpc_server, test_export_html,
-                            test_cli
+                            test_cli, test_cache_provider
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 158 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 168 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
 smoke-tested end-to-end in throwaway git repos, INCLUDING `explain` against a real, live
 `GEMINI_API_KEY` — genuinely calls Gemini and prints a real explanation; encoding fix
@@ -156,7 +167,7 @@ including two explicit XSS-payload checks). Wired into the CLI as
 file in a throwaway repo, inspected by hand — renders correctly, no external assets, ready
 to host as-is on GitHub Pages for the hackathon's required Demo Application URL.
 
-Not started yet: `verification/`, `cache/`.
+Not started yet: `verification/`.
 
 ```
 extension/
@@ -242,12 +253,9 @@ what's actually left.
    these is independently scoped; don't try to do all of them in one pass. See
    `parsing/resolver.py`'s module docstring for exactly what's already covered.
 
-2. **`cache/` — CacheProvider.** In-process LRU (stdlib `functools.lru_cache` won't do — it
-   doesn't support the content-hash-keyed invalidation from `docs/DATA_MODEL.md`; write a
-   small explicit wrapper) plus a `analysis_cache` table read/write path in `GraphStore`. Key
-   format: `repository_id + snapshot_id + relevant_node_hashes + question_hash` (see
-   `docs/DATA_MODEL.md` access-patterns table). `explain` is the expensive operation worth
-   caching now that it exists — cache on `(change_set_id, context_id)`.
+2. ~~**`cache/` — CacheProvider.**~~ Done — see `cache/provider.py` and "Current state"
+   above. Cache key is `stable_id(change_set_id, context_id)`; hits skip the AI provider
+   call entirely; misses call the provider and write back. TTL optional (no TTL = permanent).
 
 3. ~~**`extension/` — VS Code extension shell.**~~ Done — Bob IDE built this; see "Current
    state" above and `extension/` tree below. Reviewed and lightly fixed afterward (not by
@@ -269,8 +277,7 @@ what's actually left.
    required Demo Application URL field. **You still need to actually host it and paste that
    URL into the submission form** — this only produces the file.
 
-Only two items left: item 1 (CALLS/IMPORTS extension) and item 2 (`cache/`) above — pick
-either.
+Only one item left: item 1 (CALLS/IMPORTS extension) above.
 
 Whichever you pick, update this file's "Current state" and "Next up" sections when you're
 done, so the next agent (or the next Bob session) picks up from an accurate baseline instead
