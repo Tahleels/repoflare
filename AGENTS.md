@@ -31,9 +31,12 @@ RepoFlare is a repository-intelligence tool (CLI + VS Code extension over a shar
 core): it builds and incrementally maintains a structured knowledge graph of a codebase
 (files, symbols, relationships), then answers "what does this change affect?" and "did this
 change miss anything?" using deterministic graph traversal first, AI reasoning only for the
-semantic parts that traversal can't answer. Full product vision:
-`CLAUDE_CODE_MASTER_PROMPT.md` at the repo root. Engineering principles reference:
-`SYSTEM_DESIGN_REFERENCE.md`.
+semantic parts that traversal can't answer. For a plain-language overview see
+`PROJECT_OVERVIEW.md`; for a simple architecture breakdown see `docs/ARCHITECTURE_SIMPLE.md`;
+for how to actually run it see `HOW_TO_RUN.md` — all at the repo root/docs. (This repo was
+originally directed via two private planning docs, `CLAUDE_CODE_MASTER_PROMPT.md` and
+`SYSTEM_DESIGN_REFERENCE.md` — gitignored, not part of the public repo, so don't expect them
+to exist in a fresh clone.)
 
 **Read these four docs before changing architecture, schema, or module boundaries:**
 - `docs/ARCHITECTURE.md` — system shape, module boundaries, dependency direction

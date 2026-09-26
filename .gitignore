@@ -1,6 +1,11 @@
 # RepoFlare's own analysis state (per-repository, never committed)
 .repoflare/
 
+# Private build-prompt / planning docs — used to direct Claude Code, not for public repo
+CLAUDE_CODE_MASTER_PROMPT.md
+CLAUDE_CODE_MASTER_PROMPT.docx
+SYSTEM_DESIGN_REFERENCE.md
+
 # Python
 __pycache__/
 *.py[cod]

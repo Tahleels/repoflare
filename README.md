@@ -4,8 +4,10 @@ Repository intelligence: a structured, incrementally-maintained knowledge graph 
 codebase, used for change-impact analysis and AI-assisted reasoning — CLI + VS Code
 extension over a shared Python core.
 
-- Product vision: `CLAUDE_CODE_MASTER_PROMPT.md`
-- Architecture, data model, graph schema, decisions: `docs/`
+- **What this is, in plain words:** `PROJECT_OVERVIEW.md`
+- **How to actually run it:** `HOW_TO_RUN.md`
+- **Simple architecture breakdown:** `docs/ARCHITECTURE_SIMPLE.md`
+- Full architecture, data model, graph schema, decisions: `docs/`
 - Agent/contributor context (start here before changing code): `AGENTS.md`
 
 ## Quickstart (core)
