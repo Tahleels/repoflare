@@ -72,3 +72,6 @@ id_dsa
 .copilot/
 .cursor/
 .codeium/
+
+# Local-only archive (non-essential reference files)
+_archive/
