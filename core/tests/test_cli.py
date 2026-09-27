@@ -22,16 +22,12 @@ def test_init_analyze_status_end_to_end(tmp_path: Path) -> None:
     analyze_result = runner.invoke(app, ["analyze", str(tmp_path)])
     assert analyze_result.exit_code == 0, analyze_result.output
     assert "Files scanned" in analyze_result.output
-    assert "Symbols extracted" in analyze_result.output
+    assert "Functions & classes found" in analyze_result.output
 
     status_result = runner.invoke(app, ["status", str(tmp_path)])
     assert status_result.exit_code == 0, status_result.output
-    # 1 file + 2 symbols = 3 nodes; 2 CONTAINS edges + 1 CALLS edge = 3 edges. rich renders
-    # a plain-text table when stdout isn't a TTY (e.g. pytest capture) rather than a fixed
-    # layout string — bind each count to its own row (not just "3" anywhere in the output)
-    # so a bug that swapped the Nodes/Edges columns would still fail this test.
-    assert "Nodes in graph" in status_result.output
-    assert "Edges in graph" in status_result.output
+    assert "Code Symbols & Files" in status_result.output
+    assert "Code Connections" in status_result.output
 
 
 def test_status_before_init_errors(tmp_path: Path) -> None:
@@ -65,8 +61,8 @@ def test_repeated_analyze_creates_new_snapshot(tmp_path: Path) -> None:
     assert first.exit_code == 0
     assert second.exit_code == 0
     # Each invocation prints a different snapshot id
-    first_snap = next(line for line in first.output.splitlines() if "Snapshot" in line)
-    second_snap = next(line for line in second.output.splitlines() if "Snapshot" in line)
+    first_snap = next(line for line in first.output.splitlines() if "Code Map Version" in line)
+    second_snap = next(line for line in second.output.splitlines() if "Code Map Version" in line)
     assert first_snap != second_snap
 
 
@@ -245,8 +241,8 @@ def test_analyze_discovers_tests_and_links_them(tmp_path: Path) -> None:
     result = runner.invoke(app, ["analyze", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert "Tests detected" in result.output
-    assert "TESTED_BY edges" in result.output
+    assert "Unit tests found" in result.output
+    assert "Test links created" in result.output
 
 
 def test_export_html_overview_only(tmp_path: Path) -> None:

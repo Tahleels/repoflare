@@ -190,14 +190,14 @@ def analyze(path: Path = _REPO_ROOT_ARG) -> None:
     tbl.add_column("Count", justify="right", style=_SUCCESS)
 
     tbl.add_row("Files scanned", str(result.file_count))
-    tbl.add_row("Symbols extracted", str(result.symbol_count))
-    tbl.add_row("Tests detected", str(result.test_count))
-    tbl.add_row("CALLS/IMPORTS edges", str(result.resolved_edge_count))
-    tbl.add_row("TESTED_BY edges", str(result.test_edge_count))
+    tbl.add_row("Functions & classes found", str(result.symbol_count))
+    tbl.add_row("Unit tests found", str(result.test_count))
+    tbl.add_row("Code calls & imports linked", str(result.resolved_edge_count))
+    tbl.add_row("Test links created", str(result.test_edge_count))
 
     _ok("Analysis complete!\n")
     _console.print(Align.left(tbl, pad=True))
-    _hint(f"Snapshot  {result.snapshot_id}")
+    _hint(f"Code Map Version: {result.snapshot_id}")
     _console.print()
     _rule()
     _console.print(
@@ -252,9 +252,9 @@ def status(path: Path = _REPO_ROOT_ARG) -> None:
     tbl.add_column("Metric", style="bold", min_width=20)
     tbl.add_column("Value", justify="right", style=_SUCCESS)
     tbl.add_row("Repository", str(root))
-    tbl.add_row("Snapshot ID", result.snapshot_id[:16] + "…")
-    tbl.add_row("Nodes in graph", str(result.node_count))
-    tbl.add_row("Edges in graph", str(result.edge_count))
+    tbl.add_row("Code Map Version", result.snapshot_id[:16] + "…")
+    tbl.add_row("Code Symbols & Files", str(result.node_count))
+    tbl.add_row("Code Connections", str(result.edge_count))
 
     _console.print(
         Panel(
@@ -465,40 +465,63 @@ def main(ctx: typer.Context) -> None:
 
     _print_banner()
     c = "bold color(214)"
-    _console.print("  [bold]What would you like to do?[/bold]\n")
-    _console.print(f"  [{c}]1[/{c}]  ⚡ [bold]init[/bold]         Initialize RepoFlare")
-    _console.print(f"  [{c}]2[/{c}]  🔍 [bold]analyze[/bold]      Build / update code graph")
-    _console.print(f"  [{c}]3[/{c}]  📊 [bold]status[/bold]       Show repository snapshot & stats")
-    _console.print(f"  [{c}]4[/{c}]  💥 [bold]impact[/bold]       Analyze downstream change impact")
-    _console.print(f"  [{c}]5[/{c}]  🤖 [bold]explain[/bold]      AI-powered impact analysis")
-    _console.print(
-        f"  [{c}]6[/{c}]  📄 [bold]export-html[/bold]  Generate self-contained HTML report"
-    )
-    _console.print("  [bold color(244)]q[/bold color(244)]  🚪 [dim]Exit[/dim]\n")
 
-    choice = typer.prompt("Select an option [1-6]", default="2", show_default=False)
-    choice = choice.strip().lower()
+    while True:
+        _console.print("  [bold]What would you like to do?[/bold]\n")
+        _console.print(f"  [{c}]1[/{c}]  ⚡ [bold]init[/bold]         Initialize RepoFlare project")
+        _console.print(
+            f"  [{c}]2[/{c}]  🔍 [bold]analyze[/bold]      Scan project & build code map"
+        )
+        _console.print(f"  [{c}]3[/{c}]  📊 [bold]status[/bold]       View project statistics")
+        _console.print(
+            f"  [{c}]4[/{c}]  💥 [bold]impact[/bold]       Check what your code changes affect"
+        )
+        _console.print(
+            f"  [{c}]5[/{c}]  🤖 [bold]explain[/bold]      AI explanation of change impact"
+        )
+        _console.print(
+            f"  [{c}]6[/{c}]  📄 [bold]export-html[/bold]  Generate HTML report for sharing"
+        )
+        _console.print("  [bold color(244)]q[bold color(244)]  🚪 [dim]Exit[/dim]\n")
 
-    root = Path(".").resolve()
-    if choice in ("1", "init"):
-        init(root)
-    elif choice in ("2", "analyze"):
-        analyze(root)
-    elif choice in ("3", "status"):
-        status(root)
-    elif choice in ("4", "impact"):
-        from_ref = typer.prompt("Git ref to compare from", default="HEAD~1")
-        impact(from_ref=from_ref, to_ref="HEAD", path=root)
-    elif choice in ("5", "explain"):
-        from_ref = typer.prompt("Git ref to compare from", default="HEAD~1")
-        explain(from_ref=from_ref, to_ref="HEAD", path=root)
-    elif choice in ("6", "export-html"):
-        export_html(from_ref=None, to_ref="HEAD", output=None, path=root)
-    elif choice in ("q", "quit", "exit"):
-        _console.print("  [dim]Goodbye![/dim]\n")
-    else:
-        _err(f"Invalid option '{choice}'")
-        raise typer.Exit(code=1)
+        try:
+            choice = typer.prompt(
+                "Select an option [1-6, or q to exit]", default="2", show_default=False
+            )
+        except (KeyboardInterrupt, EOFError):
+            _console.print("\n  [dim]Goodbye![/dim]\n")
+            break
+
+        choice = choice.strip().lower()
+        root = Path(".").resolve()
+
+        if choice in ("1", "init"):
+            init(root)
+        elif choice in ("2", "analyze"):
+            analyze(root)
+        elif choice in ("3", "status"):
+            status(root)
+        elif choice in ("4", "impact"):
+            from_ref = typer.prompt(
+                "Compare changes starting from (e.g. HEAD~1 or commit ID)",
+                default="HEAD~1",
+            )
+            impact(from_ref=from_ref, to_ref="HEAD", path=root)
+        elif choice in ("5", "explain"):
+            from_ref = typer.prompt(
+                "Explain changes starting from (e.g. HEAD~1 or commit ID)",
+                default="HEAD~1",
+            )
+            explain(from_ref=from_ref, to_ref="HEAD", path=root)
+        elif choice in ("6", "export-html"):
+            export_html(from_ref=None, to_ref="HEAD", output=None, path=root)
+        elif choice in ("q", "quit", "exit"):
+            _console.print("  [dim]Goodbye![/dim]\n")
+            break
+        else:
+            _err(f"Invalid option '{choice}'")
+
+        _console.print("\n" + "─" * 60 + "\n")
 
 
 if __name__ == "__main__":
