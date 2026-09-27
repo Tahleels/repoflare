@@ -47,12 +47,12 @@ for _stream in (sys.stdout, sys.stderr):
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 # Warm orange/amber brand color, cool blue accent, and muted grey for secondary text.
-_BRAND   = "bold color(214)"   # amber-orange  — matches the flame in the logo
-_ACCENT  = "bold color(75)"    # sky blue
-_DIM     = "color(244)"        # muted grey
-_SUCCESS = "bold color(83)"    # bright green
-_WARN    = "bold color(220)"   # yellow
-_ERR     = "bold color(196)"   # red
+_BRAND = "bold color(214)"  # amber-orange  — matches the flame in the logo
+_ACCENT = "bold color(75)"  # sky blue
+_DIM = "color(244)"  # muted grey
+_SUCCESS = "bold color(83)"  # bright green
+_WARN = "bold color(220)"  # yellow
+_ERR = "bold color(196)"  # red
 
 # ── ASCII banner ─────────────────────────────────────────────────────────────
 _BANNER = r"""
@@ -71,7 +71,8 @@ _console = Console(highlight=False)
 app = typer.Typer(
     name="repoflare",
     help="Repository intelligence: structure, graph, and change impact.",
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
     rich_markup_mode="rich",
     add_completion=False,
 )
@@ -86,14 +87,15 @@ _EXPORT_OUTPUT_OPT = typer.Option(
 
 # Impact category → rich styles (foreground + background pill).
 _CATEGORY_STYLE: dict[str, tuple[str, str]] = {
-    "DIRECT":   ("#ff6b6b", "bold color(196)"),
+    "DIRECT": ("#ff6b6b", "bold color(196)"),
     "INDIRECT": ("#ffd93d", "bold color(220)"),
-    "RELATED":  ("#74b9ff", "bold color(75)"),
+    "RELATED": ("#74b9ff", "bold color(75)"),
     "POSSIBLE": ("#55efc4", "bold color(83)"),
 }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _print_banner() -> None:
     banner_text = Text(_BANNER, style=_BRAND)
@@ -117,7 +119,7 @@ def _ok(msg: str) -> None:
 
 
 def _err(msg: str) -> None:
-    _console.print(f"\n  [{_ERR}]✖[/{_ERR}]  {msg}", err=True)
+    _console.print(f"\n  [{_ERR}]✖[/{_ERR}]  {msg}")
 
 
 def _hint(msg: str) -> None:
@@ -133,6 +135,7 @@ def _category_pill(category: str) -> Text:
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
+
 @app.command()
 def init(path: Path = _REPO_ROOT_ARG) -> None:
     """Create the [bold].repoflare[/bold] directory and register this repository."""
@@ -145,14 +148,14 @@ def init(path: Path = _REPO_ROOT_ARG) -> None:
         _err(f"{root} is not a directory.")
         raise typer.Exit(code=1) from None
 
-    _ok(f"RepoFlare initialized!")
+    _ok("RepoFlare initialized!")
     _hint(f"Database: {result.db_path}")
     _console.print()
     _rule()
     _console.print(
         Panel(
-            f"  Next step → run [bold color(214)]repoflare analyze[/bold color(214)] "
-            f"to scan the repository and build the dependency graph.\n",
+            "  Next step → run [bold color(214)]repoflare analyze[/bold color(214)] "
+            "to scan the repository and build the dependency graph.\n",
             title="[bold]Quick Start[/bold]",
             border_style=_DIM,
             padding=(1, 2),
@@ -186,11 +189,11 @@ def analyze(path: Path = _REPO_ROOT_ARG) -> None:
     tbl.add_column("Metric", style="bold", min_width=22)
     tbl.add_column("Count", justify="right", style=_SUCCESS)
 
-    tbl.add_row("Files scanned",    str(result.file_count))
+    tbl.add_row("Files scanned", str(result.file_count))
     tbl.add_row("Symbols extracted", str(result.symbol_count))
-    tbl.add_row("Tests detected",   str(result.test_count))
+    tbl.add_row("Tests detected", str(result.test_count))
     tbl.add_row("CALLS/IMPORTS edges", str(result.resolved_edge_count))
-    tbl.add_row("TESTED_BY edges",  str(result.test_edge_count))
+    tbl.add_row("TESTED_BY edges", str(result.test_edge_count))
 
     _ok("Analysis complete!\n")
     _console.print(Align.left(tbl, pad=True))
@@ -350,7 +353,8 @@ def impact(
     _console.print()
     _rule()
     _console.print(
-        f"\n  [{_DIM}]Tip: run [bold color(214)]repoflare explain --from {from_ref}[/bold color(214)] "
+        f"\n  [{_DIM}]Tip: run [bold color(214)]repoflare explain "
+        f"--from {from_ref}[/bold color(214)] "
         f"for an AI-powered plain-language explanation.[/{_DIM}]\n"
     )
 
@@ -448,9 +452,53 @@ def export_html(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
 
-    _ok(f"Report written!")
+    _ok("Report written!")
     _hint(f"Path: {output_path}")
     _console.print()
+
+
+@app.callback()
+def main(ctx: typer.Context) -> None:
+    """RepoFlare — Repository intelligence CLI."""
+    if ctx.invoked_subcommand is not None:
+        return
+
+    _print_banner()
+    c = "bold color(214)"
+    _console.print("  [bold]What would you like to do?[/bold]\n")
+    _console.print(f"  [{c}]1[/{c}]  ⚡ [bold]init[/bold]         Initialize RepoFlare")
+    _console.print(f"  [{c}]2[/{c}]  🔍 [bold]analyze[/bold]      Build / update code graph")
+    _console.print(f"  [{c}]3[/{c}]  📊 [bold]status[/bold]       Show repository snapshot & stats")
+    _console.print(f"  [{c}]4[/{c}]  💥 [bold]impact[/bold]       Analyze downstream change impact")
+    _console.print(f"  [{c}]5[/{c}]  🤖 [bold]explain[/bold]      AI-powered impact analysis")
+    _console.print(
+        f"  [{c}]6[/{c}]  📄 [bold]export-html[/bold]  Generate self-contained HTML report"
+    )
+    _console.print("  [bold color(244)]q[/bold color(244)]  🚪 [dim]Exit[/dim]\n")
+
+    choice = typer.prompt("Select an option [1-6]", default="2", show_default=False)
+    choice = choice.strip().lower()
+
+    root = Path(".").resolve()
+    if choice in ("1", "init"):
+        init(root)
+    elif choice in ("2", "analyze"):
+        analyze(root)
+    elif choice in ("3", "status"):
+        status(root)
+    elif choice in ("4", "impact"):
+        from_ref = typer.prompt("Git ref to compare from", default="HEAD~1")
+        impact(from_ref=from_ref, to_ref="HEAD", path=root)
+    elif choice in ("5", "explain"):
+        from_ref = typer.prompt("Git ref to compare from", default="HEAD~1")
+        explain(from_ref=from_ref, to_ref="HEAD", path=root)
+    elif choice in ("6", "export-html"):
+        export_html(from_ref=None, to_ref="HEAD", output=None, path=root)
+    elif choice in ("q", "quit", "exit"):
+        _console.print("  [dim]Goodbye![/dim]\n")
+    else:
+        _err(f"Invalid option '{choice}'")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
