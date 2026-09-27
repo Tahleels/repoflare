@@ -97,7 +97,14 @@ _CATEGORY_STYLE: dict[str, tuple[str, str]] = {
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _print_banner() -> None:
+_banner_printed = False
+
+
+def _print_banner(force: bool = False) -> None:
+    global _banner_printed
+    if _banner_printed and not force:
+        return
+    _banner_printed = True
     banner_text = Text(_BANNER, style=_BRAND)
     tagline = Text(
         "  Repository intelligence  •  Graph-powered change impact  •  AI reasoning",
