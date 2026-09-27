@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "RepoFlare System Architecture",
+    "output": "repoflare_architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "full-pipeline",
+        "label": "End-to-end flow",
+        "focus": ["vscode_ext", "rpc_server", "service_orchestrator", "scanner_parser", "graph_duckdb"],
+        "note": "From VS Code host through stdio RPC, scanning codebase symbols into embedded DuckDB graph."
+      },
+      {
+        "id": "impact-ai",
+        "label": "Impact & AI explanation",
+        "focus": ["vscode_ext", "service_orchestrator", "change_impact", "context_ai", "ai_provider"],
+        "note": "Git change detection triggers CTE graph traversal and LLM contextual reasoning."
+      }
+    ]
+  },
+  "components": [
+    { "id": "vscode_ext", "type": "frontend", "label": "VS Code Extension", "sublabel": "TypeScript Host", "pos": [40, 180], "size": [160, 60] },
+    { "id": "webview_panel", "type": "frontend", "label": "Webview UI Panel", "sublabel": "Interactive SVG Graph", "pos": [40, 340], "size": [160, 60] },
+    { "id": "rpc_server", "type": "backend", "label": "JSON-RPC Server", "sublabel": "Stdio Protocol (-m rpc)", "pos": [280, 260], "size": [160, 60] },
+    { "id": "service_orchestrator", "type": "backend", "label": "Service Layer", "sublabel": "service.py Orchestration", "pos": [520, 260], "size": [170, 60] },
+    { "id": "scanner_parser", "type": "backend", "label": "Scanner & Parser", "sublabel": "Tree-sitter & Resolvers", "pos": [780, 100], "size": [170, 60] },
+    { "id": "change_impact", "type": "backend", "label": "Git & Impact Engine", "sublabel": "ChangeDetector & CTE", "pos": [780, 260], "size": [170, 60] },
+    { "id": "context_ai", "type": "backend", "label": "Context & Cache", "sublabel": "Retriever & CacheProvider", "pos": [780, 420], "size": [170, 60] },
+    { "id": "graph_duckdb", "type": "database", "label": "DuckDB GraphStore", "sublabel": ".repoflare/graph.duckdb", "pos": [1040, 180], "size": [170, 60] },
+    { "id": "ai_provider", "type": "cloud", "label": "Bob AI Providers", "sublabel": "Gemini / OpenRouter LLM", "pos": [1040, 420], "size": [170, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "VS Code Client", "wraps": ["vscode_ext", "webview_panel"] },
+    { "kind": "security-group", "label": "Python Core Engine (repoflare_core)", "wraps": ["rpc_server", "service_orchestrator", "scanner_parser", "change_impact", "context_ai", "graph_duckdb"] },
+    { "kind": "region", "label": "External AI Services", "wraps": ["ai_provider"] }
+  ],
+  "connections": [
+    { "id": "ext-to-rpc", "from": "vscode_ext", "to": "rpc_server", "label": "JSON-RPC", "fromSide": "right", "toSide": "left" },
+    { "id": "panel-to-ext", "from": "webview_panel", "to": "vscode_ext", "label": "Events", "fromSide": "top", "toSide": "bottom" },
+    { "id": "rpc-to-service", "from": "rpc_server", "to": "service_orchestrator", "label": "RPC dispatch", "fromSide": "right", "toSide": "left" },
+    { "id": "service-to-scan", "from": "service_orchestrator", "to": "scanner_parser", "label": "Analyze code", "fromSide": "top", "toSide": "left" },
+    { "id": "scan-to-graph", "from": "scanner_parser", "to": "graph_duckdb", "label": "Write nodes", "fromSide": "right", "toSide": "top" },
+    { "id": "service-to-impact", "from": "service_orchestrator", "to": "change_impact", "label": "Git impact", "fromSide": "right", "toSide": "left" },
+    { "id": "impact-to-graph", "from": "change_impact", "to": "graph_duckdb", "label": "CTE traversal", "fromSide": "right", "toSide": "bottom" },
+    { "id": "service-to-context", "from": "service_orchestrator", "to": "context_ai", "label": "Explain code", "fromSide": "bottom", "toSide": "left" },
+    { "id": "context-to-ai", "from": "context_ai", "to": "ai_provider", "label": "LLM prompt", "fromSide": "right", "toSide": "left" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Client Interface", "items": ["VS Code Extension Host communicates over framed JSON-RPC", "Webview Panel renders interactive SVG graph & impact metrics"] },
+    { "dot": "emerald", "title": "Deterministic Graph Engine", "items": ["Tree-sitter parses symbols, imports, & calls into DuckDB", "Recursive CTE queries calculate multi-depth impact propagation"] },
+    { "dot": "rose", "title": "AI Impact Explanation", "items": ["ContextRetriever packages bounded subgraphs & diff snippets", "Gemini 2.0 Flash / OpenRouter provides semantic analysis with DuckDB caching"] }
+  ]
+}
