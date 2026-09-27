@@ -61,7 +61,7 @@ test("overview shows first-run prompt when there is no snapshot", () => {
   const status: StatusResult = { snapshot_id: null, node_count: 0, edge_count: 0 };
   const html = readyHtml(status, "/repo");
 
-  assert.ok(html.includes("hasn't been analyzed yet"));
+  assert.ok(html.includes("Ready to analyze"));
   // Must NOT show "not yet analyzed" bare text (old behaviour replaced by first-run block)
   assert.ok(!html.includes("not yet analyzed"));
 });
@@ -95,7 +95,7 @@ test("rendered page shows the three nav tabs and the analyze button in overview"
   assert.ok(html.includes("Impact"));
   assert.ok(html.includes("Graph"));
   // Analyze button lives in the overview section, not in the nav
-  assert.ok(html.includes("Re-analyze repository"));
+  assert.ok(html.includes("Re-analyze Repository"));
 });
 
 // ── Graph tab tests ──────────────────────────────────────────────────────────

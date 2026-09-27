@@ -3,11 +3,10 @@ lives here; every command formats/prints what the service layer returns and tran
 exceptions into exit codes. The RPC server (rpc/) is the other interface over the same
 service layer — see service.py's module docstring.
 
-Implemented so far: init, analyze, status, impact, explain, audit — the full scan -> graph
--> impact -> targeted AI reasoning vertical slice, plus the governance audit subsystem.
-`verify` is intentionally not stubbed here; it depends on VerificationService, which doesn't
-exist yet (see AGENTS.md "Next up"). A command that always errors "not implemented" is worse
-than no command at all.
+Implemented so far: init, analyze, status, impact, explain — the full scan -> graph ->
+impact -> targeted AI reasoning vertical slice. `verify` is intentionally not stubbed here;
+it depends on VerificationService, which doesn't exist yet (see AGENTS.md "Next up"). A
+command that always errors "not implemented" is worse than no command at all.
 """
 
 from __future__ import annotations
@@ -16,20 +15,22 @@ import sys
 from pathlib import Path
 
 import typer
+from rich import box
+from rich.align import Align
 from rich.console import Console
+from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Table
+from rich.text import Text
 
 from repoflare_core.ai.factory import BobProviderConfigError
 from repoflare_core.ai.provider import BobProviderError
 from repoflare_core.change.git_adapter import GitCommandError
-from repoflare_core.domain.entities import GovernanceFinding, GovernanceStatus
-from repoflare_core.export.html import render_governance_html, render_html
-from repoflare_core.governance.github import GitHubAPIError
+from repoflare_core.export.html import render_html
 from repoflare_core.service import (
     NotAnalyzedError,
     NotInitializedError,
     run_analyze,
-    run_audit,
     run_explain,
     run_impact,
     run_init,
@@ -44,10 +45,35 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
+# ── Palette ───────────────────────────────────────────────────────────────────
+# Warm orange/amber brand color, cool blue accent, and muted grey for secondary text.
+_BRAND   = "bold color(214)"   # amber-orange  — matches the flame in the logo
+_ACCENT  = "bold color(75)"    # sky blue
+_DIM     = "color(244)"        # muted grey
+_SUCCESS = "bold color(83)"    # bright green
+_WARN    = "bold color(220)"   # yellow
+_ERR     = "bold color(196)"   # red
+
+# ── ASCII banner ─────────────────────────────────────────────────────────────
+_BANNER = r"""
+  ██████╗ ███████╗██████╗  ██████╗ ███████╗██╗      █████╗ ██████╗ ███████╗
+  ██╔══██╗██╔════╝██╔══██╗██╔═══██╗██╔════╝██║     ██╔══██╗██╔══██╗██╔════╝
+  ██████╔╝█████╗  ██████╔╝██║   ██║█████╗  ██║     ███████║██████╔╝█████╗
+  ██╔══██╗██╔══╝  ██╔═══╝ ██║   ██║██╔══╝  ██║     ██╔══██║██╔══██╗██╔══╝
+  ██║  ██║███████╗██║     ╚██████╔╝██║     ███████╗██║  ██║██║  ██║███████╗
+  ╚═╝  ╚═╝╚══════╝╚═╝      ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
+""".rstrip()
+
+# ── Console & app ────────────────────────────────────────────────────────────
+# highlight=False keeps output deterministic in tests.
+_console = Console(highlight=False)
+
 app = typer.Typer(
     name="repoflare",
     help="Repository intelligence: structure, graph, and change impact.",
     no_args_is_help=True,
+    rich_markup_mode="rich",
+    add_completion=False,
 )
 
 _REPO_ROOT_ARG = typer.Argument(Path("."), help="Repository root.")
@@ -57,78 +83,185 @@ _EXPORT_FROM_OPT = typer.Option(
 _EXPORT_OUTPUT_OPT = typer.Option(
     None, "--output", "-o", help="Output file. Defaults to <repo>/.repoflare/report.html."
 )
-_AUDIT_OUTPUT_OPT = typer.Option(
-    None, "--output", "-o", help="Output path for --html audit report."
-)
 
-# Console shared by all commands — highlight=False keeps output deterministic in tests
-# (rich auto-disables markup when stdout isn't a real TTY, so test assertions on plain
-# text strings remain unaffected regardless of this setting).
-_console = Console(highlight=False)
-
-# Impact category → rich color (used in `impact` output only).
-_CATEGORY_COLOR = {
-    "DIRECT": "bold red",
-    "INDIRECT": "bold yellow",
-    "RELATED": "bold blue",
-    "POSSIBLE": "bold green",
+# Impact category → rich styles (foreground + background pill).
+_CATEGORY_STYLE: dict[str, tuple[str, str]] = {
+    "DIRECT":   ("#ff6b6b", "bold color(196)"),
+    "INDIRECT": ("#ffd93d", "bold color(220)"),
+    "RELATED":  ("#74b9ff", "bold color(75)"),
+    "POSSIBLE": ("#55efc4", "bold color(83)"),
 }
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _print_banner() -> None:
+    banner_text = Text(_BANNER, style=_BRAND)
+    tagline = Text(
+        "  Repository intelligence  •  Graph-powered change impact  •  AI reasoning",
+        style=_DIM,
+        justify="center",
+    )
+    _console.print()
+    _console.print(Align.center(banner_text))
+    _console.print(Align.center(tagline))
+    _console.print()
+
+
+def _rule(title: str = "") -> None:
+    _console.print(Rule(title, style=_DIM))
+
+
+def _ok(msg: str) -> None:
+    _console.print(f"  [{_SUCCESS}]✔[/{_SUCCESS}]  {msg}")
+
+
+def _err(msg: str) -> None:
+    _console.print(f"\n  [{_ERR}]✖[/{_ERR}]  {msg}", err=True)
+
+
+def _hint(msg: str) -> None:
+    _console.print(f"  [{_DIM}]→[/{_DIM}]  [{_DIM}]{msg}[/{_DIM}]")
+
+
+def _category_pill(category: str) -> Text:
+    _, style = _CATEGORY_STYLE.get(category, ("#aaa", "bold"))
+    t = Text()
+    t.append(f" {category} ", style=f"on {style.split()[-1]} bold white")
+    return t
+
+
+# ── Commands ──────────────────────────────────────────────────────────────────
+
 @app.command()
 def init(path: Path = _REPO_ROOT_ARG) -> None:
-    """Create the .repoflare directory and register this repository."""
+    """Create the [bold].repoflare[/bold] directory and register this repository."""
+    _print_banner()
     root = path.resolve()
+    _console.print(f"  Initializing at [{_ACCENT}]{root}[/{_ACCENT}]…\n")
     try:
         result = run_init(root)
     except NotADirectoryError:
-        typer.echo(f"error: {root} is not a directory", err=True)
+        _err(f"{root} is not a directory.")
         raise typer.Exit(code=1) from None
-    typer.echo(f"Initialized RepoFlare at {result.db_path}")
+
+    _ok(f"RepoFlare initialized!")
+    _hint(f"Database: {result.db_path}")
+    _console.print()
+    _rule()
+    _console.print(
+        Panel(
+            f"  Next step → run [bold color(214)]repoflare analyze[/bold color(214)] "
+            f"to scan the repository and build the dependency graph.\n",
+            title="[bold]Quick Start[/bold]",
+            border_style=_DIM,
+            padding=(1, 2),
+        )
+    )
+    _console.print()
 
 
 @app.command()
 def analyze(path: Path = _REPO_ROOT_ARG) -> None:
-    """Scan the repository, parse known-language files, and build a new graph snapshot."""
+    """Scan every Python/TypeScript/JavaScript file and build a fresh dependency graph."""
+    _print_banner()
     root = path.resolve()
+    _console.print(f"  Scanning [{_ACCENT}]{root}[/{_ACCENT}]…\n")
     try:
         result = run_analyze(root)
     except NotInitializedError:
-        typer.echo("error: not initialized — run 'repoflare init' first", err=True)
+        _err("Repository not initialized.")
+        _hint("Run  repoflare init  first.")
         raise typer.Exit(code=1) from None
 
-    typer.echo(
-        f"Analyzed {result.file_count} files, extracted {result.symbol_count} symbols "
-        f"({result.test_count} tests), resolved {result.resolved_edge_count} CALLS/IMPORTS "
-        f"edges and {result.test_edge_count} TESTED_BY edges."
+    # ── Summary table ────────────────────────────────────────────────────────
+    tbl = Table(
+        box=box.SIMPLE_HEAVY,
+        show_header=True,
+        header_style=f"bold {_ACCENT.split()[-1]}",
+        border_style=_DIM,
+        padding=(0, 2),
+        expand=False,
     )
-    typer.echo(f"Snapshot: {result.snapshot_id}")
+    tbl.add_column("Metric", style="bold", min_width=22)
+    tbl.add_column("Count", justify="right", style=_SUCCESS)
+
+    tbl.add_row("Files scanned",    str(result.file_count))
+    tbl.add_row("Symbols extracted", str(result.symbol_count))
+    tbl.add_row("Tests detected",   str(result.test_count))
+    tbl.add_row("CALLS/IMPORTS edges", str(result.resolved_edge_count))
+    tbl.add_row("TESTED_BY edges",  str(result.test_edge_count))
+
+    _ok("Analysis complete!\n")
+    _console.print(Align.left(tbl, pad=True))
+    _hint(f"Snapshot  {result.snapshot_id}")
+    _console.print()
+    _rule()
+    _console.print(
+        Panel(
+            "  Use [bold color(214)]repoflare impact --from <ref>[/bold color(214)] "
+            "to see what a change affects.\n"
+            "  Use [bold color(214)]repoflare explain --from <ref>[/bold color(214)] "
+            "for an AI-powered explanation.",
+            title="[bold]What's next?[/bold]",
+            border_style=_DIM,
+            padding=(1, 2),
+        )
+    )
+    _console.print()
 
 
 @app.command()
 def status(path: Path = _REPO_ROOT_ARG) -> None:
     """Show the current snapshot and basic graph statistics."""
+    _print_banner()
     root = path.resolve()
     try:
         result = run_status(root)
     except NotInitializedError:
-        typer.echo("Not initialized — run 'repoflare init' first.")
+        _err("Repository not initialized.")
+        _hint("Run  repoflare init  first.")
         raise typer.Exit(code=1) from None
 
     if result.snapshot_id is None:
-        typer.echo("Initialized, but not yet analyzed — run 'repoflare analyze'.")
+        _console.print(
+            Panel(
+                "  This repository has been initialized but not yet analyzed.\n\n"
+                "  Run [bold color(214)]repoflare analyze[/bold color(214)] to build the "
+                "dependency graph.",
+                title="[bold]Status[/bold]",
+                border_style=_WARN.split()[-1],
+                padding=(1, 2),
+            )
+        )
+        _console.print()
         return
 
-    typer.echo(f"Repository: {root}")
-    typer.echo(f"Current snapshot: {result.snapshot_id}")
+    # ── Stats cards ──────────────────────────────────────────────────────────
+    tbl = Table(
+        box=box.SIMPLE_HEAVY,
+        show_header=True,
+        header_style=f"bold {_ACCENT.split()[-1]}",
+        border_style=_DIM,
+        padding=(0, 3),
+        expand=False,
+    )
+    tbl.add_column("Metric", style="bold", min_width=20)
+    tbl.add_column("Value", justify="right", style=_SUCCESS)
+    tbl.add_row("Repository", str(root))
+    tbl.add_row("Snapshot ID", result.snapshot_id[:16] + "…")
+    tbl.add_row("Nodes in graph", str(result.node_count))
+    tbl.add_row("Edges in graph", str(result.edge_count))
 
-    # Rich table for the counts — plain two-column layout, no decoration.
-    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2, 0, 0))
-    table.add_column("Metric")
-    table.add_column("Count", justify="right")
-    table.add_row("Nodes", str(result.node_count))
-    table.add_row("Edges", str(result.edge_count))
-    _console.print(table)
+    _console.print(
+        Panel(
+            Align.left(tbl),
+            title="[bold]Repository Status[/bold]",
+            border_style=_ACCENT.split()[-1],
+            padding=(1, 2),
+        )
+    )
+    _console.print()
 
 
 @app.command()
@@ -137,39 +270,89 @@ def impact(
     to_ref: str = typer.Option("HEAD", "--to", help="Git ref to diff to."),
     path: Path = _REPO_ROOT_ARG,
 ) -> None:
-    """Show what the change between two git refs affects, categorized by confidence."""
+    """Show what changed between two git refs and which parts of the codebase are affected."""
+    _print_banner()
     root = path.resolve()
+    _console.print(
+        f"  Analyzing impact of [{_ACCENT}]{from_ref}[/{_ACCENT}] → "
+        f"[{_ACCENT}]{to_ref}[/{_ACCENT}]…\n"
+    )
     try:
         summary = run_impact(root, from_ref, to_ref)
     except NotInitializedError:
-        typer.echo("error: not initialized — run 'repoflare init' first", err=True)
+        _err("Repository not initialized.")
+        _hint("Run  repoflare init  first.")
         raise typer.Exit(code=1) from None
     except NotAnalyzedError:
-        typer.echo("Initialized, but not yet analyzed — run 'repoflare analyze'.")
+        _err("Repository not yet analyzed.")
+        _hint("Run  repoflare analyze  first.")
         raise typer.Exit(code=1) from None
     except GitCommandError as exc:
-        typer.echo(f"error: {exc}", err=True)
+        _err(f"Git error: {exc}")
         raise typer.Exit(code=1) from exc
 
     if not summary.changed_files:
-        typer.echo(f"No files changed between {from_ref} and {to_ref}.")
+        _console.print(
+            Panel(
+                f"  No files changed between [bold]{from_ref}[/bold] and [bold]{to_ref}[/bold].",
+                border_style=_DIM,
+                padding=(1, 2),
+            )
+        )
+        _console.print()
         return
 
-    typer.echo(f"Changed files ({len(summary.changed_files)}): {', '.join(summary.changed_files)}")
+    # ── Changed files ────────────────────────────────────────────────────────
+    _console.print(
+        Panel(
+            "\n".join(f"  [bold]{f}[/bold]" for f in summary.changed_files),
+            title=f"[bold]Changed Files[/bold] ({len(summary.changed_files)})",
+            border_style=_WARN.split()[-1],
+            padding=(1, 2),
+        )
+    )
+
     if not summary.results:
-        typer.echo("No downstream impact found in the graph.")
+        _console.print(f"\n  [{_DIM}]No downstream impact found in the graph.[/{_DIM}]\n")
         return
+
+    _console.print()
+
+    # ── Affected nodes table ─────────────────────────────────────────────────
+    tbl = Table(
+        box=box.SIMPLE_HEAVY,
+        show_header=True,
+        header_style=f"bold {_ACCENT.split()[-1]}",
+        border_style=_DIM,
+        padding=(0, 2),
+        expand=True,
+    )
+    tbl.add_column("Impact", min_width=12)
+    tbl.add_column("Symbol / File", style="bold", min_width=28)
+    tbl.add_column("Location", style=f"italic {_DIM}")
 
     category_order = {c.value: i for i, c in enumerate(type(summary.results[0].category))}
     for result in sorted(summary.results, key=lambda r: category_order[r.category.value]):
-        color = _CATEGORY_COLOR.get(result.category.value, "bold")
-        _console.print(
-            f"[{color}]{result.category.value}[/{color}] ({len(result.affected_node_ids)}):"
-        )
         for node_id in result.affected_node_ids:
             node_summary = summary.node_summaries[node_id]
-            location = f" ({node_summary.file_path})" if node_summary.file_path else ""
-            typer.echo(f"  {node_summary.label}{location}")
+            location = node_summary.file_path or ""
+            pill = _category_pill(result.category.value)
+            tbl.add_row(pill, node_summary.label, location)
+
+    _console.print(
+        Panel(
+            tbl,
+            title="[bold]Impact Analysis[/bold]",
+            border_style=_ERR.split()[-1],
+            padding=(1, 2),
+        )
+    )
+    _console.print()
+    _rule()
+    _console.print(
+        f"\n  [{_DIM}]Tip: run [bold color(214)]repoflare explain --from {from_ref}[/bold color(214)] "
+        f"for an AI-powered plain-language explanation.[/{_DIM}]\n"
+    )
 
 
 @app.command()
@@ -178,31 +361,54 @@ def explain(
     to_ref: str = typer.Option("HEAD", "--to", help="Git ref to diff to."),
     path: Path = _REPO_ROOT_ARG,
 ) -> None:
-    """Explain what a change affects in plain language: deterministic impact analysis
-    first, then AI reasoning over a targeted context package — never the whole repo."""
+    """Ask AI to explain a change's impact in plain language (graph-first, AI-second)."""
+    _print_banner()
     root = path.resolve()
+    _console.print(
+        f"  Running impact analysis then AI reasoning for "
+        f"[{_ACCENT}]{from_ref}[/{_ACCENT}] → [{_ACCENT}]{to_ref}[/{_ACCENT}]…\n"
+    )
     try:
         explanation = run_explain(root, from_ref, to_ref)
     except NotInitializedError:
-        typer.echo("error: not initialized — run 'repoflare init' first", err=True)
+        _err("Repository not initialized.")
+        _hint("Run  repoflare init  first.")
         raise typer.Exit(code=1) from None
     except NotAnalyzedError:
-        typer.echo("Initialized, but not yet analyzed — run 'repoflare analyze'.")
+        _err("Repository not yet analyzed.")
+        _hint("Run  repoflare analyze  first.")
         raise typer.Exit(code=1) from None
     except GitCommandError as exc:
-        typer.echo(f"error: {exc}", err=True)
+        _err(f"Git error: {exc}")
         raise typer.Exit(code=1) from exc
     except BobProviderConfigError as exc:
-        typer.echo(f"error: {exc}", err=True)
+        _err(f"AI not configured: {exc}")
+        _hint("Set GEMINI_API_KEY or OPENROUTER_API_KEY in your environment.")
         raise typer.Exit(code=1) from exc
     except BobProviderError as exc:
-        typer.echo(f"error: AI reasoning unavailable ({exc})", err=True)
+        _err(f"AI call failed: {exc}")
         raise typer.Exit(code=1) from exc
 
     if explanation is None:
-        typer.echo(f"No files changed between {from_ref} and {to_ref}.")
+        _console.print(
+            Panel(
+                f"  No files changed between [bold]{from_ref}[/bold] and [bold]{to_ref}[/bold].",
+                border_style=_DIM,
+                padding=(1, 2),
+            )
+        )
+        _console.print()
         return
-    typer.echo(explanation)
+
+    _console.print(
+        Panel(
+            explanation,
+            title=f"[bold]AI Explanation[/bold]  [{_DIM}]{from_ref} → {to_ref}[/{_DIM}]",
+            border_style=_ACCENT.split()[-1],
+            padding=(1, 3),
+        )
+    )
+    _console.print()
 
 
 @app.command()
@@ -212,14 +418,14 @@ def export_html(
     output: Path | None = _EXPORT_OUTPUT_OPT,
     path: Path = _REPO_ROOT_ARG,
 ) -> None:
-    """Render a self-contained static HTML report (repository overview, plus an impact
-    view if --from is given). Not a web app — a one-command shareable snapshot of what the
-    CLI already computes, meant to be hosted as a plain static file."""
+    """Export a self-contained HTML report (overview + optional impact view)."""
+    _print_banner()
     root = path.resolve()
     try:
         status_result = run_status(root)
     except NotInitializedError:
-        typer.echo("error: not initialized — run 'repoflare init' first", err=True)
+        _err("Repository not initialized.")
+        _hint("Run  repoflare init  first.")
         raise typer.Exit(code=1) from None
 
     impact_summary = None
@@ -229,10 +435,11 @@ def export_html(
             impact_summary = run_impact(root, from_ref, to_ref)
             impact_refs = (from_ref, to_ref)
         except NotAnalyzedError:
-            typer.echo("Initialized, but not yet analyzed — run 'repoflare analyze'.")
+            _err("Repository not yet analyzed.")
+            _hint("Run  repoflare analyze  first.")
             raise typer.Exit(code=1) from None
         except GitCommandError as exc:
-            typer.echo(f"error: {exc}", err=True)
+            _err(f"Git error: {exc}")
             raise typer.Exit(code=1) from exc
 
     html = render_html(str(root), status_result, impact_summary, impact_refs)
@@ -240,118 +447,10 @@ def export_html(
     output_path = output if output is not None else root / ".repoflare" / "report.html"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
-    typer.echo(f"Wrote report to {output_path}")
 
-
-@app.command()
-def audit(
-    org: str = typer.Argument(
-        ..., help="GitHub organisation name (or owner/repo for a single repo)."
-    ),
-    token: str | None = typer.Option(
-        None, "--token", envvar="GITHUB_TOKEN", help="GitHub personal access token."
-    ),
-    stale_days: int = typer.Option(
-        14, "--stale-days", help="Days threshold for stale PR detection."
-    ),
-    ai: bool = typer.Option(
-        False, "--ai", is_flag=True, help="Enable Tier-2 Bob-powered AI checks."
-    ),
-    ai_pr_sample: int = typer.Option(
-        5, "--ai-pr-sample", help="Max PRs to run AI checks on per repo."
-    ),
-    no_pii: bool = typer.Option(
-        False, "--no-pii", is_flag=True, help="Skip PII/secret pattern scan."
-    ),
-    no_sprawl: bool = typer.Option(
-        False, "--no-sprawl", is_flag=True, help="Skip repo-sprawl detection."
-    ),
-    html: bool = typer.Option(
-        False, "--html", is_flag=True, help="Write an HTML report instead of console output."
-    ),
-    output: Path | None = _AUDIT_OUTPUT_OPT,
-) -> None:
-    """Run the RepoFlare Governance Audit for a GitHub org or repository.
-
-    Examples::
-
-      repoflare audit Tahleels
-      repoflare audit Tahleels --html
-      repoflare audit Tahleels --stale-days 7 --ai
-      repoflare audit myorg/myrepo --token ghp_...
-    """
-    try:
-        report = run_audit(
-            org,
-            token=token,
-            stale_days=stale_days,
-            run_ai=ai,
-            ai_pr_sample=ai_pr_sample,
-            run_pii=not no_pii,
-            run_sprawl=not no_sprawl,
-        )
-    except GitHubAPIError as exc:
-        typer.echo(f"error: GitHub API error — {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    except BobProviderConfigError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-
-    if html:
-        out_path = output or Path(f"repoflare-audit-{org.replace('/', '-')}.html")
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(render_governance_html(report), encoding="utf-8")
-        typer.echo(f"Wrote governance report to {out_path}")
-        return
-
-    # Console output
-    _console.print("\n[bold]RepoFlare Governance Audit[/bold]")
-    _console.print("─" * 46)
-    _console.print(f"Organisation: [bold]{org}[/bold]")
-    _console.print(f"Repositories: {len(report.repositories)}")
-    _console.print(f"Findings:     {len(report.findings)}\n")
-
-    # Group findings by section for display
-    _SECTION_MAP = {
-        "DEPENDABOT": "Security",
-        "STALE_PR": "Delivery",
-        "CONFLICT": "Delivery",
-        "DEPLOY_WITHOUT_TEST": "Delivery",
-        "PII": "Data Security",
-        "REPO_SPRAWL": "Repository Health",
-        "PLAN_BEFORE_SHIP": "AI Governance",
-        "INFLATED_DIFF": "AI Governance",
-        "HITL": "AI Governance",
-    }
-    _SECTION_ORDER = ["Security", "Delivery", "Repository Health", "Data Security", "AI Governance"]
-    _STATUS_COLOR = {
-        GovernanceStatus.FAIL: "bold red",
-        GovernanceStatus.WARN: "bold yellow",
-        GovernanceStatus.PASS: "bold green",
-        GovernanceStatus.UNKNOWN: "bold blue",
-    }
-    _STATUS_ICON = {
-        GovernanceStatus.FAIL: "🔴",
-        GovernanceStatus.WARN: "🟡",
-        GovernanceStatus.PASS: "✅",
-        GovernanceStatus.UNKNOWN: "❔",
-    }
-
-    sections: dict[str, list[GovernanceFinding]] = {s: [] for s in _SECTION_ORDER}
-    for finding in report.findings:
-        section = _SECTION_MAP.get(finding.check.value, "Other")
-        sections.setdefault(section, []).append(finding)
-
-    for section_name in _SECTION_ORDER:
-        section_findings = sections.get(section_name, [])
-        if not section_findings:
-            continue
-        _console.print(f"[bold]{section_name}[/bold]")
-        for f in section_findings:
-            icon = _STATUS_ICON.get(f.status, "❔")
-            color = _STATUS_COLOR.get(f.status, "bold")
-            _console.print(f"  {icon} [{color}]{f.status.value}[/{color}]  {f.title}")
-        _console.print()
+    _ok(f"Report written!")
+    _hint(f"Path: {output_path}")
+    _console.print()
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
  * Everything is inlined (no external assets) so it works with localResourceRoots=[].
  * The page uses VS Code's CSS variables for colours so it respects the active theme.
  *
- * All four tabs (Overview, Analyze, Impact, Graph) are rendered into the page at once as
+ * All three tabs (Overview, Impact, Graph) are rendered into the page at once as
  * hidden <section> elements. Tab switching is handled by pure client-side JS — no round-trip
  * to the extension host, which eliminates the full-page blink on navigation.
  *
@@ -13,7 +13,7 @@
  *   - "impact"   — queries impact for the given refs
  */
 
-import { StatusResult, ImpactSummary, GraphOverview, GraphNode, GovernanceReport, GovernanceFinding } from "./rpc";
+import { StatusResult, ImpactSummary, GraphOverview, GraphNode } from "./rpc";
 
 // ── State union for the renderer ──────────────────────────────────────────────
 
@@ -32,11 +32,9 @@ export type PanelState =
       /** The graph data — null until graphOverview has been fetched. */
       graph: GraphOverview | null;
       /** Active tab to open initially. */
-      activeTab: "overview" | "impact" | "graph" | "analyze" | "audit";
+      activeTab: "overview" | "impact" | "graph" | "analyze";
       /** Impact results to pre-populate, if any. */
       impactResult?: { from: string; to: string; impact: ImpactSummary };
-      /** Governance audit result, if any. */
-      auditResult?: GovernanceReport;
     };
 
 // ── Entry point ────────────────────────────────────────────────────────────────
@@ -64,333 +62,519 @@ ${script(state)}
 
 function styles(): string {
   return `<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
   :root {
-    --gap: 16px;
-    --radius-card: 10px;
-    --radius-btn: 6px;
+    --gap: 18px;
+    --gap-sm: 10px;
+    --radius-card: 12px;
+    --radius-btn: 8px;
+    --radius-pill: 20px;
+    /* Brand palette */
+    --rf-orange: #f97316;
+    --rf-orange-dim: rgba(249,115,22,0.18);
+    --rf-orange-glow: rgba(249,115,22,0.35);
+    --rf-blue: #60a5fa;
+    --rf-blue-dim: rgba(96,165,250,0.15);
+    --rf-purple: #a78bfa;
+    --rf-green: #34d399;
+    --rf-yellow: #fbbf24;
+    --rf-red: #f87171;
+    /* Glass card */
+    --rf-card-bg: rgba(255,255,255,0.04);
+    --rf-card-border: rgba(255,255,255,0.09);
+    --rf-card-hover: rgba(255,255,255,0.07);
+    /* Edge color in SVG graph */
+    --rf-edge: rgba(255,255,255,0.2);
   }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
   body {
-    font-family: var(--vscode-font-family);
-    font-size: var(--vscode-font-size);
+    font-family: Inter, var(--vscode-font-family), -apple-system, sans-serif;
+    font-size: 13px;
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
     margin: 0;
-    padding: var(--gap);
-    line-height: 1.5;
+    padding: 0;
+    line-height: 1.6;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
-  h1 { font-size: 1.25em; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+
+  /* ── Scrollbar ──────────────────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+
+  /* ── Typography ─────────────────────────────────────────────────────────── */
+  h1 { font-size: 1.1em; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
   h2 {
-    font-size: 0.85em;
+    font-size: 0.72em;
     font-weight: 700;
-    margin: var(--gap) 0 8px;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    padding-bottom: 4px;
+    margin: var(--gap) 0 10px;
     text-transform: uppercase;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.12em;
     color: var(--vscode-descriptionForeground);
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
-  .muted { color: var(--vscode-descriptionForeground); font-size: 0.9em; }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 0.78em;
-    font-weight: 700;
-    margin-left: 6px;
-    vertical-align: middle;
+  h2::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rf-card-border);
+  }
+  .muted { color: var(--vscode-descriptionForeground); font-size: 0.88em; }
+  code { font-family: var(--vscode-editor-font-family, 'Cascadia Code', monospace); font-size: 0.9em; }
+
+  /* ── Header ─────────────────────────────────────────────────────────────── */
+  .rf-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--rf-card-border);
+    background: linear-gradient(135deg, rgba(249,115,22,0.06) 0%, transparent 60%);
+  }
+  .rf-header-logo { flex-shrink: 0; }
+  .rf-header-text { flex: 1; min-width: 0; }
+  .rf-header-title {
+    font-size: 1.05em;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, var(--rf-orange) 0%, var(--rf-yellow) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .rf-header-sub {
+    font-size: 0.75em;
+    color: var(--vscode-descriptionForeground);
+    font-weight: 500;
     letter-spacing: 0.04em;
+    margin-top: 1px;
   }
-  .badge-direct   { background: #e53e3e; color: #fff; }
-  .badge-indirect { background: #dd6b20; color: #fff; }
-  .badge-related  { background: #3182ce; color: #fff; }
-  .badge-possible { background: #38a169; color: #fff; }
-  .stat-row { display: flex; gap: var(--gap); margin-bottom: var(--gap); flex-wrap: wrap; }
-  .stat-card {
-    background: var(--vscode-editor-inactiveSelectionBackground);
-    border: 1px solid var(--vscode-panel-border);
+  .rf-status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--rf-green);
+    box-shadow: 0 0 6px var(--rf-green);
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  /* ── Nav tabs ───────────────────────────────────────────────────────────── */
+  .nav {
+    display: flex;
+    gap: 2px;
+    padding: 10px 20px 0;
+    border-bottom: 1px solid var(--rf-card-border);
+    background: rgba(0,0,0,0.12);
+  }
+  .nav button {
+    background: none;
+    color: var(--vscode-descriptionForeground);
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: var(--radius-btn) var(--radius-btn) 0 0;
+    padding: 8px 18px 10px;
+    cursor: pointer;
+    font-size: 0.82em;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    font-family: inherit;
+  }
+  .nav button:hover {
+    color: var(--vscode-foreground);
+    background: rgba(255,255,255,0.04);
+  }
+  .nav button.active {
+    color: var(--rf-orange);
+    border-bottom-color: var(--rf-orange);
+    background: rgba(249,115,22,0.06);
+  }
+  .nav-icon { font-size: 1em; }
+
+  /* ── Main content area ──────────────────────────────────────────────────── */
+  .rf-content {
+    padding: 20px 20px;
+    max-width: 900px;
+  }
+
+  /* ── Tab sections ───────────────────────────────────────────────────────── */
+  .tab-section { display: none; }
+  .tab-section.tab-visible { display: block; }
+
+  /* ── Glass card ──────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--rf-card-bg);
+    border: 1px solid var(--rf-card-border);
     border-radius: var(--radius-card);
-    padding: 14px 20px;
+    padding: 16px 20px;
+    margin-bottom: var(--gap);
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: rgba(255,255,255,0.14); }
+  .card.card-accent { border-color: var(--rf-orange-dim); background: linear-gradient(135deg, rgba(249,115,22,0.06) 0%, var(--rf-card-bg) 60%); }
+  .card.card-info { border-color: var(--rf-blue-dim); }
+  .card p { margin: 0 0 12px; font-size: 0.9em; line-height: 1.7; color: var(--vscode-descriptionForeground); }
+  .card p:last-child { margin-bottom: 0; }
+
+  /* ── Stat row ───────────────────────────────────────────────────────────── */
+  .stat-row { display: flex; gap: var(--gap-sm); margin-bottom: var(--gap); flex-wrap: wrap; }
+  .stat-card {
+    background: var(--rf-card-bg);
+    border: 1px solid var(--rf-card-border);
+    border-radius: var(--radius-card);
+    padding: 16px 20px;
     min-width: 100px;
     flex: 1;
     position: relative;
     overflow: hidden;
+    transition: border-color 0.2s, transform 0.15s;
   }
+  .stat-card:hover { border-color: rgba(249,115,22,0.3); transform: translateY(-1px); }
   .stat-card::before {
     content: '';
     position: absolute;
     top: 0; left: 0; right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #4a7bc4, #7c5cd8);
-    border-radius: var(--radius-card) var(--radius-card) 0 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--rf-orange), var(--rf-purple));
   }
-  .stat-card .value { font-size: 1.8em; font-weight: 800; }
-  .stat-card .label { font-size: 0.78em; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+  .stat-card .value { font-size: 2em; font-weight: 800; letter-spacing: -0.03em; color: var(--vscode-foreground); }
+  .stat-card .label { font-size: 0.72em; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 4px; font-weight: 600; }
+
+  /* ── Buttons ─────────────────────────────────────────────────────────────── */
   button.action {
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
+    background: linear-gradient(135deg, var(--rf-orange) 0%, #fb923c 100%);
+    color: #fff;
     border: none;
     border-radius: var(--radius-btn);
-    padding: 7px 16px;
+    padding: 9px 20px;
     cursor: pointer;
-    font-size: 0.88em;
-    font-weight: 600;
+    font-size: 0.84em;
+    font-weight: 700;
     margin-right: 8px;
-    letter-spacing: 0.02em;
-    transition: opacity 0.15s;
+    letter-spacing: 0.03em;
+    transition: opacity 0.15s, transform 0.12s, box-shadow 0.15s;
+    font-family: inherit;
+    box-shadow: 0 2px 12px rgba(249,115,22,0.3);
   }
-  button.action:hover { opacity: 0.85; background: var(--vscode-button-hoverBackground); }
+  button.action:hover {
+    opacity: 0.92;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 18px rgba(249,115,22,0.45);
+  }
+  button.action:active { transform: translateY(0); opacity: 1; }
   button.secondary {
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-  }
-  button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); opacity: 1; }
-  input.ref-input {
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border);
+    background: var(--rf-card-bg);
+    border: 1px solid var(--rf-card-border);
+    color: var(--vscode-foreground);
     border-radius: var(--radius-btn);
-    padding: 6px 10px;
-    font-size: 0.88em;
-    margin-right: 4px;
-    width: 150px;
+    padding: 9px 20px;
+    cursor: pointer;
+    font-size: 0.84em;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition: background 0.15s, border-color 0.15s;
+    font-family: inherit;
   }
+  button.secondary:hover { background: var(--rf-card-hover); border-color: rgba(255,255,255,0.18); }
+
+  /* ── Inputs ──────────────────────────────────────────────────────────────── */
+  .ref-input {
+    background: rgba(0,0,0,0.25);
+    color: var(--vscode-foreground);
+    border: 1px solid var(--rf-card-border);
+    border-radius: var(--radius-btn);
+    padding: 8px 12px;
+    font-size: 0.84em;
+    font-family: var(--vscode-editor-font-family, monospace);
+    width: 140px;
+    transition: border-color 0.15s;
+    outline: none;
+  }
+  .ref-input:focus { border-color: var(--rf-orange); box-shadow: 0 0 0 2px var(--rf-orange-dim); }
+  .ref-input::placeholder { color: var(--vscode-descriptionForeground); opacity: 0.6; }
+  .input-label {
+    font-size: 0.75em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--vscode-descriptionForeground);
+    display: block;
+    margin-bottom: 5px;
+  }
+  .input-group { display: flex; flex-direction: column; }
+
+  /* ── Impact form ─────────────────────────────────────────────────────────── */
   .impact-form {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 14px;
     margin-bottom: var(--gap);
-    background: var(--vscode-editor-inactiveSelectionBackground);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: var(--radius-card);
-    padding: 14px 16px;
   }
-  .impact-form label { font-size: 0.82em; color: var(--vscode-descriptionForeground); font-weight: 600; }
-  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 0.88em; }
-  th { color: var(--vscode-descriptionForeground); font-weight: 700; text-transform: uppercase; font-size: 0.78em; letter-spacing: 0.05em; }
-  .filepath { font-family: var(--vscode-editor-font-family, monospace); color: var(--vscode-textLink-foreground); }
-  /* commit stepper */
-  .commit-stepper {
-    display: flex;
+
+  /* ── Badge pills ─────────────────────────────────────────────────────────── */
+  .badge {
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-bottom: 10px;
+    padding: 2px 10px;
+    border-radius: var(--radius-pill);
+    font-size: 0.72em;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
-  .commit-stepper label { font-size: 0.88em; color: var(--vscode-foreground); font-weight: 500; }
-  .stepper-control { display: flex; align-items: center; gap: 6px; }
-  .stepper-btn {
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    border: none; border-radius: 4px;
-    width: 26px; height: 26px;
-    font-size: 1.1em; font-weight: 700;
-    cursor: pointer; line-height: 1;
-    display: flex; align-items: center; justify-content: center;
-    transition: opacity 0.12s;
-  }
-  .stepper-btn:hover { opacity: 0.8; }
-  .stepper-val {
-    min-width: 32px; text-align: center;
-    font-size: 1.15em; font-weight: 700;
-    color: var(--vscode-foreground);
-  }
-  .stepper-preview {
-    font-size: 0.82em;
-    color: var(--vscode-descriptionForeground);
-    background: var(--vscode-editor-inactiveSelectionBackground);
-    border-radius: 5px;
-    padding: 4px 10px;
-  }
-  .stepper-preview code {
+  .badge-direct   { background: rgba(248,113,113,0.18); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+  .badge-indirect { background: rgba(251,191,36,0.15);  color: #fbbf24; border: 1px solid rgba(251,191,36,0.3);  }
+  .badge-related  { background: rgba(96,165,250,0.15);  color: #60a5fa; border: 1px solid rgba(96,165,250,0.3);  }
+  .badge-possible { background: rgba(52,211,153,0.15);  color: #34d399; border: 1px solid rgba(52,211,153,0.3);  }
+
+  /* ── Table ───────────────────────────────────────────────────────────────── */
+  table { border-collapse: collapse; width: 100%; margin-top: 4px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rf-card-border); font-size: 0.87em; }
+  th { color: var(--vscode-descriptionForeground); font-weight: 700; text-transform: uppercase; font-size: 0.72em; letter-spacing: 0.1em; background: rgba(0,0,0,0.12); }
+  tr:hover td { background: rgba(255,255,255,0.025); }
+  tr:last-child td { border-bottom: none; }
+  .filepath { font-family: var(--vscode-editor-font-family, monospace); color: var(--rf-blue); font-size: 0.88em; }
+
+  /* ── Snap ID ─────────────────────────────────────────────────────────────── */
+  .snap-id {
     font-family: var(--vscode-editor-font-family, monospace);
-    color: var(--vscode-textLink-foreground);
-    font-size: 1em;
+    font-size: 0.82em;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--rf-card-border);
+    padding: 3px 10px;
+    border-radius: 6px;
+    letter-spacing: 0.03em;
+    color: var(--rf-blue);
   }
-  details.impact-advanced { margin-top: 10px; }
-  details.impact-advanced summary {
-    font-size: 0.8em;
-    color: var(--vscode-descriptionForeground);
-    cursor: pointer;
-    user-select: none;
-    margin-bottom: 6px;
-  }
-  details.impact-advanced summary:hover { color: var(--vscode-foreground); }
-  .spinner { color: var(--vscode-descriptionForeground); padding: 32px 0; }
-  .error-box {
-    background: var(--vscode-inputValidation-errorBackground);
-    border: 1px solid var(--vscode-inputValidation-errorBorder);
-    padding: 12px 16px;
-    border-radius: var(--radius-card);
-    margin-top: var(--gap);
-  }
-  .changed-list { padding-left: 18px; margin: 4px 0 12px; }
-  .changed-list li { font-family: monospace; font-size: 0.88em; margin-bottom: 2px; }
-  .empty-state { color: var(--vscode-descriptionForeground); padding: 16px 0; font-style: italic; }
-  .first-run {
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: var(--radius-card);
-    padding: 24px 28px;
-    margin-top: var(--gap);
-    background: var(--vscode-editor-inactiveSelectionBackground);
-  }
-  .first-run p { margin: 0 0 12px; }
-  /* Nav bar */
-  .nav {
+
+  /* ── Loading / error ────────────────────────────────────────────────────── */
+  .spinner {
     display: flex;
-    gap: 4px;
-    margin-bottom: var(--gap);
-    border-bottom: 1px solid var(--vscode-panel-border);
-    padding-bottom: 8px;
+    align-items: center;
+    gap: 12px;
+    padding: 48px 20px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 0.92em;
   }
-  .nav button {
-    background: none;
-    color: var(--vscode-foreground);
-    border: none;
-    border-radius: var(--radius-btn);
-    padding: 5px 14px;
-    cursor: pointer;
-    font-size: 0.86em;
-    font-weight: 500;
-    opacity: 0.55;
-    transition: opacity 0.1s, background 0.1s;
+  .spinner-ring {
+    width: 20px; height: 20px;
+    border: 2px solid var(--rf-card-border);
+    border-top-color: var(--rf-orange);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
   }
-  .nav button:hover { background: var(--vscode-toolbar-hoverBackground); opacity: 0.9; }
-  .nav button.active { opacity: 1; font-weight: 700; background: var(--vscode-toolbar-activeBackground); }
-  /* Tab sections — all rendered but only one visible at a time */
-  .tab-section { display: none; }
-  .tab-section.tab-visible { display: block; }
-  /* Graph SVG */
-  .graph-wrap {
-    border: 1px solid var(--vscode-panel-border);
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-box {
+    background: rgba(248,113,113,0.08);
+    border: 1px solid rgba(248,113,113,0.25);
+    padding: 16px 20px;
     border-radius: var(--radius-card);
-    overflow: hidden;
-    background: var(--vscode-editor-inactiveSelectionBackground);
-    margin-bottom: var(--gap);
-  }
-  .graph-wrap svg { display: block; width: 100%; }
-  .graph-note { font-size: 0.82em; color: var(--vscode-descriptionForeground); margin-bottom: 8px; }
-  .node-detail {
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: var(--radius-card);
-    padding: 10px 14px;
-    font-size: 0.88em;
-    min-height: 36px;
-    background: var(--vscode-editor-inactiveSelectionBackground);
-  }
-  .node-detail .detail-label { font-weight: 700; margin-bottom: 2px; font-size: 1em; }
-  .node-detail .detail-path { font-family: monospace; color: var(--vscode-textLink-foreground); font-size: 0.9em; }
-  /* Legend */
-  .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
-  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.8em; font-weight: 500; }
-  .legend-swatch { width: 13px; height: 13px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px rgba(255,255,255,0.15); }
-  /* Impact results box */
-  .impact-results {
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: var(--radius-card);
-    overflow: hidden;
     margin-top: var(--gap);
+    font-size: 0.9em;
+    color: var(--rf-red);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  /* ── Changed files list ──────────────────────────────────────────────────── */
+  .changed-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .changed-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 0.87em;
+    border-bottom: 1px solid var(--rf-card-border);
+    color: var(--rf-yellow);
+  }
+  .changed-list li:last-child { border-bottom: none; }
+  .changed-list li::before { content: '◆'; color: var(--rf-orange); font-size: 0.7em; flex-shrink: 0; }
+
+  /* ── Empty state ─────────────────────────────────────────────────────────── */
+  .empty-state {
+    color: var(--vscode-descriptionForeground);
+    padding: 24px 0;
+    font-style: italic;
+    font-size: 0.9em;
+    text-align: center;
+  }
+
+  /* ── First-run ───────────────────────────────────────────────────────────── */
+  .first-run {
+    border: 1px solid var(--rf-orange-dim);
+    border-radius: var(--radius-card);
+    padding: 32px 28px;
+    margin-top: var(--gap);
+    background: linear-gradient(135deg, rgba(249,115,22,0.06) 0%, var(--rf-card-bg) 70%);
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .first-run::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--rf-orange), var(--rf-purple), var(--rf-blue));
+  }
+  .first-run-icon { font-size: 2.4em; margin-bottom: 14px; }
+  .first-run h3 { font-size: 1em; font-weight: 700; margin: 0 0 10px; }
+  .first-run p { margin: 0 0 20px; font-size: 0.9em; color: var(--vscode-descriptionForeground); line-height: 1.7; max-width: 400px; margin-left: auto; margin-right: auto; }
+
+  /* ── Impact results ──────────────────────────────────────────────────────── */
+  .impact-results {
+    border: 1px solid var(--rf-card-border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+    margin-bottom: var(--gap-sm);
   }
   .impact-results-header {
-    background: var(--vscode-editor-inactiveSelectionBackground);
-    padding: 10px 14px;
-    font-size: 0.82em;
+    background: rgba(0,0,0,0.18);
+    padding: 10px 16px;
+    font-size: 0.75em;
     font-weight: 700;
     color: var(--vscode-descriptionForeground);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    border-bottom: 1px solid var(--vscode-panel-border);
+    letter-spacing: 0.1em;
+    border-bottom: 1px solid var(--rf-card-border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
-  /* Analyze tab */
-  .analyze-card {
-    background: var(--vscode-editor-inactiveSelectionBackground);
-    border: 1px solid var(--vscode-panel-border);
+
+  /* ── Graph tab ───────────────────────────────────────────────────────────── */
+  .graph-wrap {
+    border: 1px solid var(--rf-card-border);
     border-radius: var(--radius-card);
-    padding: 20px 24px;
-    margin-top: 4px;
+    overflow: hidden;
+    background: rgba(0,0,0,0.2);
+    margin-bottom: var(--gap-sm);
   }
-  .analyze-card p { margin: 0 0 14px; font-size: 0.92em; line-height: 1.6; }
-  /* Audit tab */
-  .audit-form {
-    background: var(--vscode-editor-inactiveSelectionBackground);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: var(--radius-card);
-    padding: 14px 16px;
-    margin-bottom: var(--gap);
-    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
-  }
-  .audit-form label { font-size: 0.82em; color: var(--vscode-descriptionForeground); font-weight: 600; display: block; margin-bottom: 3px; }
-  .audit-form input[type=text] {
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border);
-    border-radius: var(--radius-btn);
-    padding: 6px 10px; font-size: 0.88em; width: 200px;
-  }
-  .finding-card {
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: var(--radius-card);
-    padding: 10px 14px;
-    margin-bottom: 8px;
-    background: var(--vscode-editor-inactiveSelectionBackground);
-  }
-  .finding-title { font-weight: 600; font-size: 0.92em; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
-  .finding-desc { font-size: 0.84em; color: var(--vscode-descriptionForeground); margin-bottom: 4px; line-height: 1.5; }
-  .finding-provenance { font-size: 0.76em; color: var(--vscode-descriptionForeground); opacity: 0.7; }
-  .badge-pass    { background: #38a169; color: #fff; }
-  .badge-warn    { background: #dd6b20; color: #fff; }
-  .badge-fail    { background: #e53e3e; color: #fff; }
-  .badge-unknown { background: #3182ce; color: #fff; }
-  .audit-section-header {
-    font-size: 0.78em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  .graph-wrap svg { display: block; width: 100%; }
+  .graph-note {
+    font-size: 0.78em;
     color: var(--vscode-descriptionForeground);
-    border-bottom: 1px solid var(--vscode-panel-border);
-    padding-bottom: 4px; margin: var(--gap) 0 8px;
+    margin-bottom: 10px;
+    padding: 6px 12px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 6px;
+    display: inline-block;
   }
-  .audit-summary-row { display: flex; gap: var(--gap); margin-bottom: var(--gap); flex-wrap: wrap; }
-  .audit-stat { background: var(--vscode-editor-inactiveSelectionBackground); border: 1px solid var(--vscode-panel-border); border-radius: var(--radius-card); padding: 10px 18px; min-width: 80px; text-align: center; }
-  .audit-stat .val { font-size: 1.6em; font-weight: 800; }
-  .audit-stat .lbl { font-size: 0.75em; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+  .node-detail {
+    border: 1px solid var(--rf-card-border);
+    border-radius: var(--radius-card);
+    padding: 12px 16px;
+    font-size: 0.87em;
+    min-height: 44px;
+    background: var(--rf-card-bg);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .node-detail .detail-label { font-weight: 700; font-size: 0.96em; }
+  .node-detail .detail-path { font-family: var(--vscode-editor-font-family, monospace); color: var(--rf-blue); font-size: 0.88em; margin-top: 2px; }
+
+  /* ── Legend ──────────────────────────────────────────────────────────────── */
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.78em; font-weight: 600; color: var(--vscode-descriptionForeground); }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+  /* ── Info strip ──────────────────────────────────────────────────────────── */
+  .info-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78em;
+    color: var(--vscode-descriptionForeground);
+    padding: 8px 14px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 8px;
+    margin-bottom: var(--gap);
+    border: 1px solid var(--rf-card-border);
+  }
+  .info-strip strong { color: var(--vscode-foreground); font-weight: 700; }
+
+  /* ── Root path ───────────────────────────────────────────────────────────── */
+  .root-path {
+    font-size: 0.78em;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    margin-bottom: var(--gap);
+    padding: 7px 12px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 6px;
+    border: 1px solid var(--rf-card-border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
 </style>`;
 }
 
 // ── Header strip ──────────────────────────────────────────────────────────────
 
 function header(): string {
-  // Logo: two connected graph nodes with a flame rising from them
-  return `<div style="display:flex;align-items:center;margin-bottom:8px">
-  <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:10px;flex-shrink:0">
-    <!-- Edge connecting the two base nodes -->
-    <line x1="8" y1="20" x2="20" y2="20" stroke="var(--vscode-foreground)" stroke-width="1.5" opacity="0.55"/>
-    <!-- Left base node -->
-    <circle cx="8" cy="20" r="3.5" fill="#4a7bc4"/>
-    <!-- Right base node -->
-    <circle cx="20" cy="20" r="3.5" fill="#7c5cd8"/>
-    <!-- Flame body -->
-    <path d="M14 4 C14 4 10 8 10 12 C10 13.5 10.8 15 12 15.8 C11.6 14.4 12.2 13 13 12.2 C13 13.8 14 14.8 14 16 C15.2 15 16.4 13.4 16 11.6 C17 12.6 17.4 14 17.2 15.4 C18.6 14.2 19 12.4 18.4 10.8 C20 12 20.4 14 19.8 15.8 C21.2 14 21.4 11 20 9 C18.6 7 16.6 5.6 14 4 Z" fill="#e07b2a" opacity="0.92"/>
-    <!-- Flame inner highlight -->
-    <path d="M14 8 C14 8 12 10.5 12 12.5 C12 13.4 12.5 14.2 13.2 14.6 C13 13.6 13.4 12.8 14 12.2 C14 13.2 14.6 13.8 14.8 14.6 C15.4 13.8 15.6 12.8 15.2 11.8 C15.8 12.4 16 13.2 15.8 14 C16.6 13.2 16.8 11.8 16 10.6 C15.2 9.4 14.6 8.6 14 8 Z" fill="#f6ad55" opacity="0.8"/>
-    <!-- Connecting edges from flame base to nodes -->
-    <line x1="14" y1="16" x2="8" y2="20" stroke="var(--vscode-foreground)" stroke-width="1" opacity="0.35"/>
-    <line x1="14" y1="16" x2="20" y2="20" stroke="var(--vscode-foreground)" stroke-width="1" opacity="0.35"/>
+  return `<div class="rf-header">
+  <svg class="rf-header-logo" width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Outer glow ring -->
+    <circle cx="18" cy="18" r="17" stroke="rgba(249,115,22,0.2)" stroke-width="1"/>
+    <!-- Graph edges -->
+    <line x1="10" y1="26" x2="26" y2="26" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+    <line x1="18" y1="19" x2="10" y2="26" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
+    <line x1="18" y1="19" x2="26" y2="26" stroke="rgba(255,255,255,0.18)" stroke-width="1"/>
+    <!-- Left node -->
+    <circle cx="10" cy="26" r="4" fill="#60a5fa"/>
+    <!-- Right node -->
+    <circle cx="26" cy="26" r="4" fill="#a78bfa"/>
+    <!-- Flame -->
+    <path d="M18 5 C18 5 13 10 13 15 C13 17 14.2 18.5 15.8 19.5 C15.3 17.8 16.1 16.2 17.1 15.3 C17.1 17.2 18.3 18.3 18.3 19.8 C19.7 18.8 21.2 17 20.7 14.8 C21.9 16 22.4 17.7 22.1 19.2 C23.8 17.8 24.3 15.8 23.6 14 C25.4 15.3 25.9 17.5 25.2 19.2 C27 17.2 27.2 14.2 25.6 12 C24 9.8 21.6 8.2 18 5 Z" fill="#f97316" opacity="0.9"/>
+    <path d="M18 9 C18 9 15.5 12 15.5 14.5 C15.5 15.7 16.1 16.7 17 17.2 C16.8 16 17.3 15.2 18 14.5 C18 15.7 18.8 16.4 19 17.2 C19.8 16.3 20.1 15.2 19.6 14 C20.3 14.8 20.6 15.9 20.3 17 C21.3 16.1 21.5 14.5 20.7 13.2 C19.9 12 19.1 10.8 18 9 Z" fill="#fbbf24" opacity="0.85"/>
   </svg>
-  <div><h1>RepoFlare</h1><div class="muted">Repository intelligence</div></div>
+  <div class="rf-header-text">
+    <div class="rf-header-title">RepoFlare</div>
+    <div class="rf-header-sub">Repository Intelligence · Graph · AI</div>
+  </div>
+  <div class="rf-status-dot" title="Extension active"></div>
 </div>`;
 }
 
 // ── Nav bar ───────────────────────────────────────────────────────────────────
 
+const NAV_ITEMS: Array<{ tab: string; icon: string; label: string }> = [
+  { tab: "overview", icon: "⬡", label: "Overview" },
+  { tab: "impact",   icon: "⚡", label: "Impact" },
+  { tab: "graph",    icon: "◎", label: "Graph" },
+];
+
 function nav(active: string): string {
-  const btn = (tab: string, label: string) => {
-    const cls = active === tab ? " active" : "";
-    return `<button class="${cls}" data-tab="${escHtml(tab)}">${label}</button>`;
-  };
+  const buttons = NAV_ITEMS.map(({ tab, icon, label }) => {
+    const cls = active === tab || (active === "analyze" && tab === "overview") ? " active" : "";
+    return `<button class="${cls}" data-tab="${escHtml(tab)}"><span class="nav-icon">${icon}</span>${label}</button>`;
+  }).join("\n  ");
+
   return `<nav class="nav" id="nav-bar">
-  ${btn("overview", "Overview")}
-  ${btn("impact", "Impact")}
-  ${btn("graph", "Graph")}
-  ${btn("audit", "Governance")}
+  ${buttons}
 </nav>`;
 }
 
@@ -399,9 +583,9 @@ function nav(active: string): string {
 function body(state: PanelState): string {
   switch (state.state) {
     case "loading":
-      return `<div class="spinner">⏳ Loading…</div>`;
+      return `<div class="spinner"><div class="spinner-ring"></div> Thinking…</div>`;
     case "error":
-      return `<div class="error-box">⚠ ${escHtml(state.message)}</div>`;
+      return `<div class="rf-content"><div class="error-box">⚠ ${escHtml(state.message)}</div></div>`;
     case "ready":
       return readyBody(state);
   }
@@ -412,11 +596,10 @@ function body(state: PanelState): string {
  * the rest are hidden via CSS and revealed by client-side JS without any host round-trip.
  */
 function readyBody(state: Extract<PanelState, { state: "ready" }>): string {
-  // "analyze" activeTab is treated as "overview" — the button is embedded there now.
   const active = state.activeTab === "analyze" ? "overview" : state.activeTab;
   const vis = (tab: string) => active === tab ? " tab-visible" : "";
 
-  return `
+  return `<div class="rf-content">
 <div id="tab-overview" class="tab-section${vis("overview")}">
   ${overviewSection(state.status, state.root)}
 </div>
@@ -426,10 +609,7 @@ function readyBody(state: Extract<PanelState, { state: "ready" }>): string {
 <div id="tab-graph" class="tab-section${vis("graph")}">
   ${graphSection(state.graph)}
 </div>
-<div id="tab-audit" class="tab-section${vis("audit")}">
-  ${auditSection(state.auditResult)}
-</div>
-`;
+</div>`;
 }
 
 // ── Overview tab ──────────────────────────────────────────────────────────────
@@ -437,27 +617,39 @@ function readyBody(state: Extract<PanelState, { state: "ready" }>): string {
 function overviewSection(status: StatusResult, root: string): string {
   if (!status.snapshot_id) {
     return `
-<div class="muted" style="margin-bottom:var(--gap)">${escHtml(root)}</div>
+<div class="root-path">📁 ${escHtml(root)}</div>
 <div class="first-run">
-  <p>This repository hasn't been analyzed yet. Scan every Python, TypeScript, and JavaScript file to build the dependency graph — extracting symbols, calls, and imports.</p>
-  <button class="action" id="btn-analyze">Analyze repository</button>
+  <div class="first-run-icon">🔥</div>
+  <h3>Ready to analyze</h3>
+  <p>Scan every Python, TypeScript, and JavaScript file to build the dependency graph — extracting symbols, calls, imports, and test links.</p>
+  <button class="action" id="btn-analyze">⚡ Analyze Repository</button>
 </div>`;
   }
 
+  const snapLine = `<span class="snap-id">${escHtml(status.snapshot_id)}</span>`;
+
   return `
-<div class="muted" style="margin-bottom:var(--gap)">${escHtml(root)}</div>
+<div class="root-path">📁 ${escHtml(root)}</div>
 
 <div class="stat-row">
-  ${statCard(String(status.node_count), "Nodes")}
-  ${statCard(String(status.edge_count), "Edges")}
+  ${statCard(String(status.node_count), "Nodes", "◎")}
+  ${statCard(String(status.edge_count), "Edges", "⟶")}
+</div>
+
+<h2>Snapshot</h2>
+<div class="card card-info" style="display:flex;align-items:center;gap:12px;padding:12px 16px">
+  <span style="color:var(--rf-green);font-size:1.1em">✔</span>
+  <div>
+    <div style="font-size:0.75em;color:var(--vscode-descriptionForeground);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Latest Snapshot</div>
+    ${snapLine}
+  </div>
 </div>
 
 <h2>Actions</h2>
-<div class="analyze-card">
-  <p>Re-scans every Python, TypeScript, and JavaScript file and rebuilds the dependency graph.</p>
-  <button class="action" id="btn-analyze">Re-analyze repository</button>
-</div>
-`;
+<div class="card card-accent">
+  <p>Re-scans every Python, TypeScript, and JavaScript file and rebuilds the dependency graph. The current snapshot will be replaced.</p>
+  <button class="action" id="btn-analyze">⚡ Re-analyze Repository</button>
+</div>`;
 }
 
 // ── Impact tab ─────────────────────────────────────────────────────────────────
@@ -466,65 +658,63 @@ function impactSection(
   result?: { from: string; to: string; impact: ImpactSummary }
 ): string {
   const resultsHtml = result ? impactResultsHtml(result.from, result.to, result.impact) : "";
-  // Detect if last result used a non-stepper ref so we can pre-open advanced
-  const isAdvanced = result && !/^HEAD~\d+$/.test(result.from);
-  const advancedOpen = isAdvanced ? " open" : "";
 
   return `
-<h2>Impact analysis</h2>
-<div class="impact-form">
-  <div class="commit-stepper">
-    <label for="commit-count">Compare last</label>
-    <div class="stepper-control">
-      <button class="stepper-btn" id="stepper-minus" type="button" aria-label="Fewer commits">−</button>
-      <span class="stepper-val" id="stepper-val">1</span>
-      <button class="stepper-btn" id="stepper-plus" type="button" aria-label="More commits">+</button>
-    </div>
-    <label for="commit-count">commit${result ? "" : "s"}</label>
+<h2>⚡ Impact Analysis</h2>
+<div class="card">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+    <span style="font-size:0.78em;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--vscode-descriptionForeground)">Compare two git refs to see what changed and what it affects</span>
   </div>
-  <div class="stepper-preview" id="stepper-preview">
-    Will compare <code id="preview-from">HEAD~1</code> → <code>HEAD</code>
-  </div>
-  <button class="action" id="btn-impact" style="margin-top:8px">Run impact</button>
-
-  <details class="impact-advanced"${advancedOpen}>
-    <summary>Advanced: specify git refs manually</summary>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <label class="muted" for="from-ref">From</label>
-      <input class="ref-input" id="from-ref" placeholder="HEAD~1" value="${result && isAdvanced ? escHtml(result.from) : ""}" />
-      <label class="muted" for="to-ref">To</label>
-      <input class="ref-input" id="to-ref" placeholder="HEAD" value="${result && isAdvanced ? escHtml(result.to) : ""}" />
+  <div class="impact-form">
+    <div class="input-group">
+      <label class="input-label" for="from-ref">From ref</label>
+      <input class="ref-input" id="from-ref" placeholder="HEAD~1" value="${result ? escHtml(result.from) : ""}" />
     </div>
-  </details>
+    <div style="color:var(--vscode-descriptionForeground);padding-bottom:2px;font-size:1.1em">→</div>
+    <div class="input-group">
+      <label class="input-label" for="to-ref">To ref</label>
+      <input class="ref-input" id="to-ref" placeholder="HEAD" value="${result ? escHtml(result.to) : ""}" />
+    </div>
+    <button class="action" id="btn-impact" style="margin-bottom:0">Run analysis</button>
+  </div>
 </div>
-<div id="impact-results-container">${resultsHtml}</div>
-`;
+<div id="impact-results-container">${resultsHtml}</div>`;
 }
 
 function impactResultsHtml(from: string, to: string, impact: ImpactSummary): string {
   const changedSection =
     impact.changed_files.length === 0
-      ? `<div class="empty-state" style="padding:12px 14px">No changed files between these refs.</div>`
-      : `<ul class="changed-list" style="margin:8px 0 4px;padding-left:28px">${impact.changed_files.map((f) => `<li>${escHtml(f)}</li>`).join("")}</ul>`;
+      ? `<div class="empty-state">No changed files between these refs.</div>`
+      : `<ul class="changed-list">${impact.changed_files.map((f) => `<li>${escHtml(f)}</li>`).join("")}</ul>`;
 
-  const impactSection =
+  const impactContent =
     impact.results.length === 0
-      ? `<div class="empty-state" style="padding:12px 14px">No affected nodes found.</div>`
+      ? `<div class="empty-state">No affected nodes found — great, this change is well-isolated!</div>`
       : impactTable(impact);
 
   return `
 <div class="impact-results">
-  <div class="impact-results-header">Changed files — ${escHtml(from)} → ${escHtml(to)}</div>
-  ${changedSection}
+  <div class="impact-results-header">
+    <span style="color:var(--rf-yellow)">◆</span> Changed files — <strong style="color:var(--vscode-foreground)">${escHtml(from)}</strong> → <strong style="color:var(--vscode-foreground)">${escHtml(to)}</strong>
+    <span class="badge badge-indirect" style="margin-left:auto">${impact.changed_files.length} file${impact.changed_files.length !== 1 ? "s" : ""}</span>
+  </div>
+  <div style="padding:8px 0 4px">${changedSection}</div>
 </div>
 <div class="impact-results" style="margin-top:10px">
-  <div class="impact-results-header">Affected nodes</div>
-  ${impactSection}
+  <div class="impact-results-header">
+    <span style="color:var(--rf-red)">◆</span> Affected nodes
+    <span class="badge badge-direct" style="margin-left:auto">${impact.results.reduce((n, r) => n + r.affected_node_ids.length, 0)} total</span>
+  </div>
+  ${impactContent}
 </div>`;
 }
 
-function statCard(value: string, label: string): string {
-  return `<div class="stat-card"><div class="value">${escHtml(value)}</div><div class="label">${escHtml(label)}</div></div>`;
+function statCard(value: string, label: string, icon: string): string {
+  return `<div class="stat-card">
+  <div style="font-size:1.2em;margin-bottom:6px;opacity:0.5">${icon}</div>
+  <div class="value">${escHtml(value)}</div>
+  <div class="label">${escHtml(label)}</div>
+</div>`;
 }
 
 // ── Impact table ───────────────────────────────────────────────────────────────
@@ -536,6 +726,13 @@ const CATEGORY_BADGE: Record<string, string> = {
   POSSIBLE: "badge-possible",
 };
 
+const CATEGORY_ICON: Record<string, string> = {
+  DIRECT: "🔴",
+  INDIRECT: "🟡",
+  RELATED: "🔵",
+  POSSIBLE: "🟢",
+};
+
 function impactTable(impact: ImpactSummary): string {
   const rows = impact.results.flatMap((r) =>
     r.affected_node_ids.map((nodeId) => {
@@ -543,122 +740,43 @@ function impactTable(impact: ImpactSummary): string {
       const label = summary?.label ?? nodeId;
       const filePath = summary?.file_path ?? "";
       const badgeClass = CATEGORY_BADGE[r.category] ?? "badge-possible";
+      const icon = CATEGORY_ICON[r.category] ?? "⚪";
       return `<tr>
-  <td><span class="badge ${badgeClass}">${escHtml(r.category)}</span></td>
-  <td>${escHtml(label)}</td>
+  <td><span class="badge ${badgeClass}">${icon} ${escHtml(r.category)}</span></td>
+  <td style="font-weight:600">${escHtml(label)}</td>
   <td class="filepath">${escHtml(filePath)}</td>
 </tr>`;
     })
   );
 
   if (rows.length === 0) {
-    return `<div class="empty-state" style="padding:12px 14px">No affected nodes found.</div>`;
+    return `<div class="empty-state" style="padding:20px">No affected nodes found.</div>`;
   }
 
   return `<table>
-<thead><tr><th>Category</th><th>Symbol</th><th>File</th></tr></thead>
+<thead><tr><th>Category</th><th>Symbol / File</th><th>Location</th></tr></thead>
 <tbody>${rows.join("")}</tbody>
 </table>`;
-}
-
-// ── Audit tab ─────────────────────────────────────────────────────────────────
-
-const SECTION_ORDER = ["Security", "Delivery", "Repository Health", "Data Security", "AI Governance"];
-const CHECK_SECTION: Record<string, string> = {
-  DEPENDABOT: "Security",
-  STALE_PR: "Delivery",
-  CONFLICT: "Delivery",
-  DEPLOY_WITHOUT_TEST: "Delivery",
-  PII: "Data Security",
-  REPO_SPRAWL: "Repository Health",
-  PLAN_BEFORE_SHIP: "AI Governance",
-  INFLATED_DIFF: "AI Governance",
-  HITL: "AI Governance",
-};
-const STATUS_ICON: Record<string, string> = {
-  PASS: "✅", WARN: "⚠", FAIL: "✗", UNKNOWN: "?",
-};
-const STATUS_BADGE: Record<string, string> = {
-  PASS: "badge-pass", WARN: "badge-warn", FAIL: "badge-fail", UNKNOWN: "badge-unknown",
-};
-
-function findingCard(f: GovernanceFinding): string {
-  const badgeCls = STATUS_BADGE[f.status] ?? "badge-unknown";
-  const icon = STATUS_ICON[f.status] ?? "?";
-  return `<div class="finding-card">
-  <div class="finding-title">
-    <span class="badge ${badgeCls}">${escHtml(icon)} ${escHtml(f.status)}</span>
-    ${escHtml(f.title)}
-  </div>
-  <div class="finding-desc">${escHtml(f.description)}</div>
-  <div class="finding-provenance">provenance: ${escHtml(f.provenance)}</div>
-</div>`;
-}
-
-function auditSection(report?: GovernanceReport): string {
-  const formHtml = `
-<h2>Governance Audit</h2>
-<div class="audit-form">
-  <div>
-    <label for="audit-org">GitHub org or owner/repo</label>
-    <input type="text" id="audit-org" placeholder="e.g. tiangolo/fastapi" value="${report ? escHtml(report.org) : ""}" />
-  </div>
-  <div>
-    <label for="audit-token">GitHub token (optional)</label>
-    <input type="text" id="audit-token" placeholder="ghp_… or set GITHUB_TOKEN" />
-  </div>
-  <button class="action" id="btn-audit">Run audit</button>
-</div>`;
-
-  if (!report) {
-    return `${formHtml}<div class="empty-state">Enter a GitHub org or repo above and click <strong>Run audit</strong>.</div>`;
-  }
-
-  const fail = report.findings.filter(f => f.status === "FAIL").length;
-  const warn = report.findings.filter(f => f.status === "WARN").length;
-  const pass = report.findings.filter(f => f.status === "PASS").length;
-
-  const summaryHtml = `<div class="audit-summary-row">
-  <div class="audit-stat"><div class="val" style="color:#e53e3e">${fail}</div><div class="lbl">Failures</div></div>
-  <div class="audit-stat"><div class="val" style="color:#dd6b20">${warn}</div><div class="lbl">Warnings</div></div>
-  <div class="audit-stat"><div class="val" style="color:#38a169">${pass}</div><div class="lbl">Passing</div></div>
-  <div class="audit-stat"><div class="val">${report.repositories.length}</div><div class="lbl">Repos</div></div>
-</div>`;
-
-  const grouped: Record<string, GovernanceFinding[]> = {};
-  for (const f of report.findings) {
-    const sec = CHECK_SECTION[f.check] ?? "Other";
-    if (!grouped[sec]) grouped[sec] = [];
-    grouped[sec].push(f);
-  }
-
-  const sectionsHtml = SECTION_ORDER
-    .filter(s => grouped[s] && grouped[s].length > 0)
-    .map(s => `<div class="audit-section-header">${escHtml(s)}</div>
-${grouped[s].map(findingCard).join("")}`)
-    .join("");
-
-  return `${formHtml}${summaryHtml}${sectionsHtml || '<div class="empty-state">No findings.</div>'}`;
 }
 
 // ── Graph tab ─────────────────────────────────────────────────────────────────
 
 // Node colors by kind — chosen for distinctness against both light and dark VS Code themes.
 const NODE_COLOR: Record<string, string> = {
-  FILE:            "#4a7bc4",   // blue
-  SYMBOL:          "#5a9e6f",   // green
-  TEST:            "#e07b2a",   // amber
-  MODULE:          "#7c5cd8",   // purple
-  API_ENDPOINT:    "#d1517a",   // rose
-  CONFIG_ITEM:     "#3a9e9e",   // teal
-  EXTERNAL_SERVICE:"#9e7c4a",   // tan
+  FILE:             "#60a5fa",   // blue
+  SYMBOL:           "#34d399",   // green
+  TEST:             "#f97316",   // orange
+  MODULE:           "#a78bfa",   // purple
+  API_ENDPOINT:     "#f472b6",   // pink
+  CONFIG_ITEM:      "#2dd4bf",   // teal
+  EXTERNAL_SERVICE: "#fb923c",   // amber
 };
-const NODE_COLOR_DEFAULT = "#888";
+const NODE_COLOR_DEFAULT = "#9ca3af";
 
 const SVG_W = 800;
 const SVG_H = 560;
-const NODE_R = 18;    // circle radius for non-FILE nodes (larger icons)
-const FILE_HALF = 20; // half-size for FILE rectangles (larger icons)
+const NODE_R = 18;    // circle radius for non-FILE nodes
+const FILE_HALF = 20; // half-size for FILE rectangles
 
 /** Pure deterministic circular layout: evenly spaced around a circle. */
 function layoutNodes(nodes: GraphNode[]): Array<{ x: number; y: number }> {
@@ -702,10 +820,9 @@ function kindIcon(kind: string): string {
   switch (kind) {
     case "FILE":
       // Document with folded corner
-      return `<path ${base} d="M-7,-9 L4,-9 L8,-5 L8,9 L-7,9 Z M4,-9 L4,-5 L8,-5" stroke="rgba(255,255,255,0.6)" stroke-width="1" fill="none"/>
-              <path ${base} d="M-7,-9 L4,-9 L4,-5 L8,-5 L8,9 L-7,9 Z" opacity="0.0"/>
-              <path fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.2" d="M-4,-2 L5,-2 M-4,1 L5,1 M-4,4 L2,4"/>
-              <path fill="rgba(255,255,255,0.92)" ${base} d="M-7,-9 L4,-9 L8,-5 L8,9 L-7,9 Z M3.5,-9 L3.5,-4.5 L8,-4.5"/>`;
+      return `<path ${base} d="M-7,-9 L4,-9 L4,-5 L8,-5 L8,9 L-7,9 Z" fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.3"/>
+              <path fill="rgba(255,255,255,0.5)" d="M4,-9 L8,-5 L4,-5 Z"/>
+              <path fill="none" stroke="rgba(255,255,255,0.85)" stroke-width="1.1" d="M-4,-1 L5,-1 M-4,2 L5,2 M-4,5 L2,5"/>`;
     case "SYMBOL":
       // Curly braces { }
       return `<path ${base} fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.8" stroke-linecap="round"
@@ -724,13 +841,15 @@ function kindIcon(kind: string): string {
                d="M0,-9 L8,-4 L8,4 L0,9 L-8,4 L-8,-4 Z"/>
               <path fill="none" stroke="rgba(255,255,255,0.55)" stroke-width="1" d="M0,-9 L0,0 M8,-4 L0,0 M-8,-4 L0,0"/>`;
     case "API_ENDPOINT":
-      // Lightning bolt / endpoint
+      // Lightning bolt
       return `<path ${base} d="M2,-9 L-4,0 L1,0 L-2,9 L8,0 L2,0 Z"/>`;
     case "CONFIG_ITEM":
-      // Gear / settings cog
-      return `<path fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.5"
-               d="M0,-8 L1,-6 L3.5,-7 L5,-5 L3,-3.5 L3,-2 C5,-1 6,0 6,0 C6,0 5,1 3,2 L3,3.5 L5,5 L3.5,7 L1,6 L0,8 L-1,6 L-3.5,7 L-5,5 L-3,3.5 L-3,2 C-5,1 -6,0 -6,0 C-6,0 -5,-1 -3,-2 L-3,-3.5 L-5,-5 L-3.5,-7 L-1,-6 Z"/>
-              <circle cx="0" cy="0" r="3" fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.5"/>`;
+      // Simplified gear
+      return `<circle cx="0" cy="0" r="4" fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.8"/>
+              <circle cx="0" cy="-7.5" r="1.5" fill="rgba(255,255,255,0.85)"/>
+              <circle cx="0" cy="7.5" r="1.5" fill="rgba(255,255,255,0.85)"/>
+              <circle cx="-7.5" cy="0" r="1.5" fill="rgba(255,255,255,0.85)"/>
+              <circle cx="7.5" cy="0" r="1.5" fill="rgba(255,255,255,0.85)"/>`;
     case "EXTERNAL_SERVICE":
       // Cloud
       return `<path fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
@@ -747,13 +866,17 @@ function kindIcon(kind: string): string {
 
 function graphSection(graph: GraphOverview | null): string {
   if (!graph) {
-    return `<div class="empty-state">Graph data not yet loaded. Run <strong>Analyze</strong> first, then re-open the Graph tab.</div>`;
+    return `<div class="card" style="text-align:center;padding:40px 28px">
+  <div style="font-size:2em;margin-bottom:12px">◎</div>
+  <div style="font-weight:700;margin-bottom:8px">Graph not loaded</div>
+  <p class="muted" style="margin:0">Run <strong>Analyze</strong> first, then re-open the Graph tab.</p>
+</div>`;
   }
 
   const { nodes, edges, truncated, total_node_count } = graph;
 
   const truncNote = truncated
-    ? `<div class="graph-note">Showing the ${escHtml(String(nodes.length))} most-connected nodes out of ${escHtml(String(total_node_count))}.</div>`
+    ? `<div class="graph-note">Showing the ${escHtml(String(nodes.length))} most-connected nodes out of ${escHtml(String(total_node_count))} total.</div>`
     : "";
 
   const legend = `<div class="legend">
@@ -771,8 +894,6 @@ function graphSection(graph: GraphOverview | null): string {
   const idxById: Record<string, number> = {};
   nodes.forEach((n, i) => { idxById[n.node_id] = i; });
 
-  // Edges — each gets an id so JS can update endpoints when a node is dragged.
-  // Shapes use (0,0)-relative coords; position comes from the parent <g> transform.
   const edgeDefs = edges.map((e, ei) => {
     const si = idxById[e.src_node_id];
     const di = idxById[e.dst_node_id];
@@ -788,11 +909,9 @@ function graphSection(graph: GraphOverview | null): string {
     const y1 = (s.y + (dy / len) * srcR).toFixed(1);
     const x2 = (d.x - (dx / len) * dstR).toFixed(1);
     const y2 = (d.y - (dy / len) * dstR).toFixed(1);
-    return `<line id="edge-${ei}" data-src="${si}" data-dst="${di}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--rf-edge)" stroke-width="1.5" opacity="0.7" marker-end="url(#arrowhead)"/>`;
+    return `<line id="edge-${ei}" data-src="${si}" data-dst="${di}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--rf-edge)" stroke-width="1.5" opacity="0.6" marker-end="url(#arrowhead)"/>`;
   }).join("");
 
-  // Nodes — each <g> uses transform="translate(x,y)" so dragging only touches the transform.
-  // All child shapes are drawn around (0,0).
   const nodeShapes = nodes.map((n, i) => {
     const { x, y } = positions[i];
     const color = NODE_COLOR[n.kind] ?? NODE_COLOR_DEFAULT;
@@ -800,24 +919,19 @@ function graphSection(graph: GraphOverview | null): string {
     const label = escHtml(rawLabel);
     const title = escHtml(`${n.name} (${n.kind})${n.file_path ? "\n" + n.file_path : ""}`);
 
-    // ── Node body shape ──────────────────────────────────────────────────────
-    // data-idx is on BOTH the shape and the group so closest() works from any child
     let shape: string;
     if (n.kind === "FILE") {
-      shape = `<rect x="${-FILE_HALF}" y="${(-FILE_HALF * 0.8).toFixed(1)}" width="${FILE_HALF * 2}" height="${(FILE_HALF * 1.6).toFixed(1)}" rx="6" fill="${escHtml(color)}" stroke="rgba(255,255,255,0.22)" stroke-width="1.5" class="graph-node" data-idx="${i}"/>`;
+      shape = `<rect x="${-FILE_HALF}" y="${(-FILE_HALF * 0.8).toFixed(1)}" width="${FILE_HALF * 2}" height="${(FILE_HALF * 1.6).toFixed(1)}" rx="7" fill="${escHtml(color)}" stroke="rgba(255,255,255,0.15)" stroke-width="1" class="graph-node" data-idx="${i}"/>`;
     } else {
-      shape = `<circle cx="0" cy="0" r="${NODE_R}" fill="${escHtml(color)}" stroke="rgba(255,255,255,0.22)" stroke-width="1.5" class="graph-node" data-idx="${i}"/>`;
+      shape = `<circle cx="0" cy="0" r="${NODE_R}" fill="${escHtml(color)}" stroke="rgba(255,255,255,0.15)" stroke-width="1" class="graph-node" data-idx="${i}"/>`;
     }
 
-    // ── Kind icon (SVG path, centered at 0,0) ───────────────────────────────
     const iconEl = kindIcon(n.kind);
 
-    // ── Label pill ──────────────────────────────────────────────────────────
-    // Approximate label width: ~6.3px per char for font-size 10
     const labelW = Math.max(rawLabel.length * 6.3 + 12, 32);
     const labelY = NODE_R + 10;
-    const pillEl = `<rect x="${(-labelW / 2).toFixed(1)}" y="${labelY}" width="${labelW.toFixed(1)}" height="15" rx="7.5" fill="var(--vscode-editor-inactiveSelectionBackground)" opacity="0.88" pointer-events="none"/>`;
-    const textEl = `<text x="0" y="${labelY + 10.5}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--vscode-foreground)" pointer-events="none" style="font-family:var(--vscode-font-family)">${label}</text>`;
+    const pillEl = `<rect x="${(-labelW / 2).toFixed(1)}" y="${labelY}" width="${labelW.toFixed(1)}" height="15" rx="7.5" fill="rgba(0,0,0,0.55)" pointer-events="none"/>`;
+    const textEl = `<text x="0" y="${labelY + 10.5}" text-anchor="middle" font-size="10" font-weight="600" fill="rgba(255,255,255,0.9)" pointer-events="none" style="font-family:var(--vscode-font-family)">${label}</text>`;
 
     return `<g id="node-g-${i}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})" class="node-group" data-idx="${i}"><title>${title}</title>${shape}${iconEl}${pillEl}${textEl}</g>`;
   }).join("");
@@ -825,13 +939,13 @@ function graphSection(graph: GraphOverview | null): string {
   const svg = `<svg viewBox="0 0 ${SVG_W} ${SVG_H}" xmlns="http://www.w3.org/2000/svg" id="graph-svg" style="cursor:default;user-select:none">
   <defs>
     <style>
-      :root { --rf-edge: var(--vscode-foreground); }
+      :root { --rf-edge: rgba(255,255,255,0.18); }
       .graph-node { cursor: grab; transition: filter 0.15s; }
-      .graph-node:hover { filter: brightness(1.22) drop-shadow(0 0 4px rgba(255,255,255,0.18)); }
-      .node-group.dragging .graph-node { cursor: grabbing; filter: brightness(1.3) drop-shadow(0 0 6px rgba(255,255,255,0.25)); }
+      .graph-node:hover { filter: brightness(1.3) drop-shadow(0 0 8px currentColor); }
+      .node-group.dragging .graph-node { cursor: grabbing; filter: brightness(1.4) drop-shadow(0 0 10px currentColor); }
     </style>
     <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-      <path d="M0,0 L0,6 L8,3 z" fill="var(--vscode-panel-border)" opacity="0.9"/>
+      <path d="M0,0 L0,6 L8,3 z" fill="rgba(255,255,255,0.2)"/>
     </marker>
   </defs>
   <g id="edges-layer">${edgeDefs}</g>
@@ -848,7 +962,6 @@ function graphSection(graph: GraphOverview | null): string {
     }))
   ).replace(/</g, "\\u003c");
 
-  // Edge connectivity data for live endpoint recalculation during drag.
   const edgeDataJson = JSON.stringify(
     edges.map((e, ei) => ({
       id: ei,
@@ -860,7 +973,7 @@ function graphSection(graph: GraphOverview | null): string {
   return `
 ${truncNote}
 ${legend}
-<h2>Dependency graph <span class="muted" style="font-size:0.82em;font-weight:400;text-transform:none;letter-spacing:0">— drag nodes to rearrange</span></h2>
+<h2>◎ Dependency Graph <span class="muted" style="font-size:0.82em;font-weight:400;text-transform:none;letter-spacing:0">— drag nodes to rearrange</span></h2>
 <div class="graph-wrap">${svg}</div>
 <div class="node-detail" id="node-detail">
   <span class="muted">Click a node to see details.</span>
@@ -872,7 +985,6 @@ ${legend}
   var SVG_W     = ${SVG_W};
   var SVG_H     = ${SVG_H};
 
-  // Current positions — kept in sync with the <g> transforms
   var pos = nodeData.map(function(_, i) {
     var g = document.getElementById('node-g-' + i);
     var t = g ? g.getAttribute('transform') : 'translate(0,0)';
@@ -884,7 +996,6 @@ ${legend}
   var svg    = document.getElementById('graph-svg');
   if (!svg) return;
 
-  // ── Edge endpoint recalculation ─────────────────────────────────────────────
   function updateEdges() {
     edgeData.forEach(function(e) {
       var line = document.getElementById('edge-' + e.id);
@@ -901,8 +1012,6 @@ ${legend}
     });
   }
 
-  // ── Drag state ──────────────────────────────────────────────────────────────
-  // dragged = { idx, offX, offY, group, moved }
   var dragged = null;
 
   function svgPoint(clientX, clientY) {
@@ -911,9 +1020,7 @@ ${legend}
     return pt.matrixTransform(svg.getScreenCTM().inverse());
   }
 
-  // Resolve the node index from any element inside a node group
   function nodeIdxFromTarget(el) {
-    // Try the element itself first (shape has data-idx), then walk up to the group
     if (el.hasAttribute && el.hasAttribute('data-idx')) return parseInt(el.getAttribute('data-idx'), 10);
     var g = el.closest ? el.closest('.node-group') : null;
     if (g && g.hasAttribute('data-idx')) return parseInt(g.getAttribute('data-idx'), 10);
@@ -941,7 +1048,6 @@ ${legend}
     var margin = nodeData[dragged.idx].r + 4;
     nx = Math.max(margin, Math.min(SVG_W - margin, nx));
     ny = Math.max(margin, Math.min(SVG_H - margin, ny));
-    // Mark as moved if more than 3px from original
     var dx = nx - pos[dragged.idx].x, dy = ny - pos[dragged.idx].y;
     if (Math.sqrt(dx*dx+dy*dy) > 3) dragged.moved = true;
     pos[dragged.idx] = { x: nx, y: ny };
@@ -955,10 +1061,7 @@ ${legend}
     dragged = null;
   });
 
-  // ── Node click → detail panel ───────────────────────────────────────────────
-  // Fires after mouseup. Only show detail if the node wasn't dragged.
   svg.addEventListener('click', function(e) {
-    // If a drag just ended and it actually moved, skip this click
     if (dragged && dragged.moved) return;
     var idx = nodeIdxFromTarget(e.target);
     if (idx < 0) return;
@@ -970,11 +1073,15 @@ ${legend}
     };
     var kindLabel = kindLabels[n.kind] || n.kind;
     var fp = n.file_path ? '<div class="detail-path">' + esc(n.file_path) + '</div>' : '';
+    var color = nodeColors[n.kind] || '#9ca3af';
     detail.innerHTML =
-      '<div style="display:flex;align-items:center;gap:8px">' +
-        '<div class="detail-label">' + esc(n.name) + '</div>' +
-        '<span class="badge" style="background:' + (nodeColors[n.kind]||\'#888\') + ';color:#fff;margin-left:0">' + esc(kindLabel) + '</span>' +
-      '</div>' + fp;
+      '<div style="display:flex;align-items:flex-start;gap:10px;width:100%">' +
+        '<div style="width:10px;height:10px;border-radius:50%;background:' + color + ';flex-shrink:0;margin-top:4px;box-shadow:0 0 6px ' + color + '"></div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="detail-label">' + esc(n.name) + ' <span style="font-size:0.78em;font-weight:600;color:var(--vscode-descriptionForeground);text-transform:uppercase;letter-spacing:0.08em">' + esc(kindLabel) + '</span></div>' +
+          fp +
+        '</div>' +
+      '</div>';
   });
 
   var nodeColors = ${JSON.stringify(NODE_COLOR).replace(/</g, "\\u003c")};
@@ -987,7 +1094,6 @@ ${legend}
 
 function script(state: PanelState): string {
   if (state.state !== "ready") {
-    // Loading/error states have no interactive elements.
     return "";
   }
 
@@ -996,7 +1102,7 @@ function script(state: PanelState): string {
   const vscode = acquireVsCodeApi();
 
   // ── Tab switching (pure client-side, no host round-trip) ──────────────────
-  const tabs = ['overview', 'impact', 'graph', 'audit'];
+  const tabs = ['overview', 'impact', 'graph'];
 
   function showTab(name) {
     tabs.forEach(function(t) {
@@ -1018,57 +1124,25 @@ function script(state: PanelState): string {
   var btnAnalyze = document.getElementById('btn-analyze');
   if (btnAnalyze) {
     btnAnalyze.addEventListener('click', function() {
+      btnAnalyze.textContent = '⏳ Analyzing…';
+      btnAnalyze.disabled = true;
       vscode.postMessage({ type: 'analyze' });
     });
   }
 
-  // ── Impact form stepper ────────────────────────────────────────────────────
-  var stepperVal = 1;
-  var stepperValEl  = document.getElementById('stepper-val');
-  var previewFromEl = document.getElementById('preview-from');
-  var minusBtn = document.getElementById('stepper-minus');
-  var plusBtn  = document.getElementById('stepper-plus');
-
-  function updateStepper() {
-    if (stepperValEl)  stepperValEl.textContent  = String(stepperVal);
-    if (previewFromEl) previewFromEl.textContent = 'HEAD~' + stepperVal;
-  }
-  if (minusBtn) minusBtn.addEventListener('click', function() {
-    if (stepperVal > 1) { stepperVal--; updateStepper(); }
-  });
-  if (plusBtn) plusBtn.addEventListener('click', function() {
-    if (stepperVal < 50) { stepperVal++; updateStepper(); }
-  });
-  updateStepper();
-
-  // ── Impact run ─────────────────────────────────────────────────────────────
+  // ── Impact form ────────────────────────────────────────────────────────────
   var btnImpact = document.getElementById('btn-impact');
   if (btnImpact) {
     btnImpact.addEventListener('click', function() {
-      // If the advanced section is open and has values, use those; else use the stepper.
-      var advDetails = document.querySelector('details.impact-advanced');
-      var fromInput = document.getElementById('from-ref');
-      var toInput   = document.getElementById('to-ref');
-      var advancedFrom = fromInput ? fromInput.value.trim() : '';
-      var advancedTo   = toInput   ? toInput.value.trim()   : '';
-      var useAdvanced  = advDetails && advDetails.open && advancedFrom;
-
-      var from = useAdvanced ? advancedFrom : ('HEAD~' + stepperVal);
-      var to   = useAdvanced ? (advancedTo || 'HEAD') : 'HEAD';
+      var from = document.getElementById('from-ref').value.trim();
+      var to   = document.getElementById('to-ref').value.trim() || 'HEAD';
+      if (!from) {
+        document.getElementById('from-ref').focus();
+        return;
+      }
+      btnImpact.textContent = '⏳ Running…';
+      btnImpact.disabled = true;
       vscode.postMessage({ type: 'impact', from: from, to: to });
-    });
-  }
-
-  // ── Audit run ──────────────────────────────────────────────────────────────
-  var btnAudit = document.getElementById('btn-audit');
-  if (btnAudit) {
-    btnAudit.addEventListener('click', function() {
-      var orgInput   = document.getElementById('audit-org');
-      var tokenInput = document.getElementById('audit-token');
-      var org   = orgInput   ? orgInput.value.trim()   : '';
-      var token = tokenInput ? tokenInput.value.trim() : '';
-      if (!org) { orgInput && orgInput.focus(); return; }
-      vscode.postMessage({ type: 'audit', org: org, token: token });
     });
   }
 

@@ -27,9 +27,6 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("repoflare.showGraph", () =>
       withClient(context, (client, root) => RepoFlarePanel.showGraph(context, client, root))
-    ),
-    vscode.commands.registerCommand("repoflare.showAudit", () =>
-      withClient(context, (client, root) => RepoFlarePanel.showAudit(context, client, root))
     )
   );
 }
