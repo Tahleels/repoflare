@@ -2,6 +2,8 @@
 
 Repository intelligence: a structured, incrementally-maintained knowledge graph of a codebase, used for change-impact analysis and AI-assisted reasoning — CLI + VS Code extension over a shared Python core.
 
+![RepoFlare Demo](bob_sessions/thumbnail.png)
+
 ---
 
 ## 🎯 What Problem RepoFlare Solves
