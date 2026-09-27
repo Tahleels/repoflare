@@ -109,7 +109,12 @@ core/
                             framing, identical wire format to LSP (protocol.py: read_message
                             /write_message). server.py's RpcServer dispatches
                             repoflare/{init,analyze,status,impact,explain} to service.py and
-                            JSON-encodes the (dataclass/Enum/Path) results. Exceptions map to
+                            JSON-encodes the (dataclass/Enum/Path/datetime) results.
+                            handle_request also json.dumps-proves every result before
+                            returning it, so an unencodable value becomes a -32603 error
+                            response instead of crashing serve_forever (which would kill
+                            the subprocess — the extension then shows "repoflare_core
+                            process exited with code 1"). Exceptions map to
                             JSON-RPC error codes: -32001 not initialized, -32002 not
                             analyzed, -32003 git error, -32004 no AI provider configured,
                             -32005 AI call failed, plus standard -32600/-32601/-32700.
@@ -131,7 +136,7 @@ core/
                             overwrite, TTL, expiry pruning, and the cache-hit short-circuit
                             in run_explain end-to-end.
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    181 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    184 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_test_resolver, test_graph_store,
                             test_traversal, test_change_detector, test_impact_analyzer,
@@ -140,8 +145,8 @@ core/
                             test_cli, test_cache_provider
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 181 passed, 1 skipped. `uv run ruff check src tests`
-→ clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
+Verified: `cd core && uv sync && uv run pytest -q` → 184 passed, 1 skipped. `uv run ruff check src tests`
+→ clean. `uv run ruff format src tests` → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
 smoke-tested end-to-end in throwaway git repos, INCLUDING `explain` against a real, live
 `GEMINI_API_KEY` — genuinely calls Gemini and prints a real explanation; encoding fix
 verified to eliminate the corruption that was present before it. Test discovery was
@@ -184,11 +189,15 @@ extension/
                           routes responses to promises by request id. Typed wrappers for
                           all six RPC methods (init/analyze/status/impact/explain/graph).
                           RpcError with named error code constants for all -320xx codes.
-                          GraphNode/GraphEdge/GraphOverview interfaces added.
+                          GraphNode/GraphEdge/GraphOverview interfaces added. `closed`
+                          getter + idempotent dispose() so a dead subprocess is detectable.
     extension.ts        activate() / deactivate(). One client per workspace folder.
                           Commands: repoflare.showOverview, repoflare.analyze,
-                          repoflare.showImpact, repoflare.showGraph. withClient() handles
-                          NOT_INITIALIZED / NOT_ANALYZED with offer-to-fix prompts.
+                          repoflare.showImpact, repoflare.showGraph, repoflare.showAudit.
+                          withClient() handles NOT_INITIALIZED / NOT_ANALYZED with
+                          offer-to-fix prompts. getOrCreateClient() replaces a cached
+                          client whose subprocess died (was: reused it forever, so every
+                          later command failed with "RPC client is closed" until reload).
     panel.ts            RepoFlarePanel — singleton WebviewPanel. show()/showGraph() create
                           or reveal. Handles webview messages (analyze, impact, back, ready,
                           nav-graph, nav-impact). _showGraphView() fetches graphOverview and
@@ -219,8 +228,8 @@ extension/
 ```
 
 Verified: `cd extension && npm install && npm run build` → clean, 33 KB bundle.
-`npm run typecheck` (src + test) → zero type errors (strict mode). `npm test` → 16/16 passing,
-including both real subprocess integration tests.
+`npm run typecheck` (src + test) → zero type errors (strict mode). `npm test` → 17/17 passing,
+including both real subprocess integration tests plus the `closed`-getter/spawn-failure test.
 
 ## Conventions in force — match these, don't introduce new patterns
 

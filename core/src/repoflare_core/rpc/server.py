@@ -8,6 +8,8 @@ Methods:
   repoflare/status   {"path": str}
   repoflare/impact   {"path": str, "from": str, "to"?: str}
   repoflare/explain  {"path": str, "from": str, "to"?: str}
+  repoflare/audit    {"org": str, "token"?: str, "stale_days"?: int,
+                      "run_ai"?: bool, "run_pii"?: bool, "run_sprawl"?: bool}
 
 Error codes (JSON-RPC "error.code"), beyond the standard -32700/-32600/-32601/-32603:
   -32001  not initialized (run repoflare/init first)
@@ -15,12 +17,15 @@ Error codes (JSON-RPC "error.code"), beyond the standard -32700/-32600/-32601/-3
   -32003  git command failed (bad ref, not a git repo, etc.)
   -32004  no AI provider configured
   -32005  AI provider call failed
+  -32006  GitHub API error
 """
 
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import Callable
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import IO, Any
@@ -28,11 +33,13 @@ from typing import IO, Any
 from repoflare_core.ai.factory import BobProviderConfigError
 from repoflare_core.ai.provider import BobProviderError
 from repoflare_core.change.git_adapter import GitCommandError
+from repoflare_core.governance.github import GitHubAPIError
 from repoflare_core.rpc.protocol import MalformedMessageError, read_message, write_message
 from repoflare_core.service import (
     NotAnalyzedError,
     NotInitializedError,
     run_analyze,
+    run_audit,
     run_explain,
     run_graph_overview,
     run_impact,
@@ -49,6 +56,7 @@ _NOT_ANALYZED = -32002
 _GIT_ERROR = -32003
 _AI_NOT_CONFIGURED = -32004
 _AI_CALL_FAILED = -32005
+_GITHUB_API_ERROR = -32006
 
 _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], int] = {
     NotInitializedError: _NOT_INITIALIZED,
@@ -56,14 +64,19 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], int] = {
     GitCommandError: _GIT_ERROR,
     BobProviderConfigError: _AI_NOT_CONFIGURED,
     BobProviderError: _AI_CALL_FAILED,
+    GitHubAPIError: _GITHUB_API_ERROR,
 }
 
 
 def _to_jsonable(value: Any) -> Any:
-    """Recursively convert dataclasses/Path/Enum values from service.py's result types
-    into plain JSON-serializable structures."""
+    """Recursively convert dataclasses/Path/Enum/datetime values from service.py's result
+    types into plain JSON-serializable structures."""
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return {f.name: _to_jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
+    if isinstance(value, datetime):
+        # GovernanceReport.generated_at and friends: isoformat() matches what the
+        # extension's TS interfaces declare (generated_at: string).
+        return value.isoformat()
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, Enum):
@@ -111,6 +124,19 @@ def _handle_graph(params: dict[str, Any]) -> Any:
     return _to_jsonable(run_graph_overview(_resolve_path(params)))
 
 
+def _handle_audit(params: dict[str, Any]) -> Any:
+    return _to_jsonable(
+        run_audit(
+            params["org"],
+            token=params.get("token"),
+            stale_days=int(params.get("stale_days", 14)),
+            run_ai=bool(params.get("run_ai", False)),
+            run_pii=bool(params.get("run_pii", True)),
+            run_sprawl=bool(params.get("run_sprawl", True)),
+        )
+    )
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any]], Any]] = {
     "repoflare/init": _handle_init,
     "repoflare/analyze": _handle_analyze,
@@ -118,6 +144,7 @@ _HANDLERS: dict[str, Callable[[dict[str, Any]], Any]] = {
     "repoflare/impact": _handle_impact,
     "repoflare/explain": _handle_explain,
     "repoflare/graph": _handle_graph,
+    "repoflare/audit": _handle_audit,
 }
 
 
@@ -142,6 +169,12 @@ class RpcServer:
 
         try:
             result = handler(params)
+            # Prove the result is encodable HERE, where a failure can still become a
+            # JSON-RPC error response. write_message's json.dumps runs outside this
+            # try/except (in serve_forever), so an unencodable value escaping this check
+            # would crash the whole stdio loop — which the extension surfaces as
+            # "repoflare_core process exited with code 1" and rejects every pending call.
+            json.dumps(result)
         except KeyError as exc:
             return self._error(request_id, _INVALID_REQUEST, f"missing required param: {exc}")
         except Exception as exc:  # noqa: BLE001 — deliberately broad: any handler failure

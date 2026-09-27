@@ -31,6 +31,10 @@
       {
         "command": "repoflare.showGraph",
         "title": "RepoFlare: Show Dependency Graph"
+      },
+      {
+        "command": "repoflare.showAudit",
+        "title": "RepoFlare: Governance Audit…"
       }
     ],
     "configuration": {

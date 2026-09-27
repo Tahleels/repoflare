@@ -13,7 +13,7 @@
  *   - "impact"   — queries impact for the given refs
  */
 
-import { StatusResult, ImpactSummary, GraphOverview, GraphNode } from "./rpc";
+import { StatusResult, ImpactSummary, GraphOverview, GraphNode, GovernanceReport, GovernanceFinding } from "./rpc";
 
 // ── State union for the renderer ──────────────────────────────────────────────
 
@@ -32,9 +32,11 @@ export type PanelState =
       /** The graph data — null until graphOverview has been fetched. */
       graph: GraphOverview | null;
       /** Active tab to open initially. */
-      activeTab: "overview" | "impact" | "graph" | "analyze";
+      activeTab: "overview" | "impact" | "graph" | "analyze" | "audit";
       /** Impact results to pre-populate, if any. */
       impactResult?: { from: string; to: string; impact: ImpactSummary };
+      /** Governance audit result, if any. */
+      auditResult?: GovernanceReport;
     };
 
 // ── Entry point ────────────────────────────────────────────────────────────────
@@ -309,6 +311,47 @@ function styles(): string {
     margin-top: 4px;
   }
   .analyze-card p { margin: 0 0 14px; font-size: 0.92em; line-height: 1.6; }
+  /* Audit tab */
+  .audit-form {
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: var(--radius-card);
+    padding: 14px 16px;
+    margin-bottom: var(--gap);
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+  }
+  .audit-form label { font-size: 0.82em; color: var(--vscode-descriptionForeground); font-weight: 600; display: block; margin-bottom: 3px; }
+  .audit-form input[type=text] {
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--radius-btn);
+    padding: 6px 10px; font-size: 0.88em; width: 200px;
+  }
+  .finding-card {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: var(--radius-card);
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    background: var(--vscode-editor-inactiveSelectionBackground);
+  }
+  .finding-title { font-weight: 600; font-size: 0.92em; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+  .finding-desc { font-size: 0.84em; color: var(--vscode-descriptionForeground); margin-bottom: 4px; line-height: 1.5; }
+  .finding-provenance { font-size: 0.76em; color: var(--vscode-descriptionForeground); opacity: 0.7; }
+  .badge-pass    { background: #38a169; color: #fff; }
+  .badge-warn    { background: #dd6b20; color: #fff; }
+  .badge-fail    { background: #e53e3e; color: #fff; }
+  .badge-unknown { background: #3182ce; color: #fff; }
+  .audit-section-header {
+    font-size: 0.78em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--vscode-descriptionForeground);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    padding-bottom: 4px; margin: var(--gap) 0 8px;
+  }
+  .audit-summary-row { display: flex; gap: var(--gap); margin-bottom: var(--gap); flex-wrap: wrap; }
+  .audit-stat { background: var(--vscode-editor-inactiveSelectionBackground); border: 1px solid var(--vscode-panel-border); border-radius: var(--radius-card); padding: 10px 18px; min-width: 80px; text-align: center; }
+  .audit-stat .val { font-size: 1.6em; font-weight: 800; }
+  .audit-stat .lbl { font-size: 0.75em; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
 </style>`;
 }
 
@@ -347,6 +390,7 @@ function nav(active: string): string {
   ${btn("overview", "Overview")}
   ${btn("impact", "Impact")}
   ${btn("graph", "Graph")}
+  ${btn("audit", "Governance")}
 </nav>`;
 }
 
@@ -381,6 +425,9 @@ function readyBody(state: Extract<PanelState, { state: "ready" }>): string {
 </div>
 <div id="tab-graph" class="tab-section${vis("graph")}">
   ${graphSection(state.graph)}
+</div>
+<div id="tab-audit" class="tab-section${vis("audit")}">
+  ${auditSection(state.auditResult)}
 </div>
 `;
 }
@@ -512,6 +559,86 @@ function impactTable(impact: ImpactSummary): string {
 <thead><tr><th>Category</th><th>Symbol</th><th>File</th></tr></thead>
 <tbody>${rows.join("")}</tbody>
 </table>`;
+}
+
+// ── Audit tab ─────────────────────────────────────────────────────────────────
+
+const SECTION_ORDER = ["Security", "Delivery", "Repository Health", "Data Security", "AI Governance"];
+const CHECK_SECTION: Record<string, string> = {
+  DEPENDABOT: "Security",
+  STALE_PR: "Delivery",
+  CONFLICT: "Delivery",
+  DEPLOY_WITHOUT_TEST: "Delivery",
+  PII: "Data Security",
+  REPO_SPRAWL: "Repository Health",
+  PLAN_BEFORE_SHIP: "AI Governance",
+  INFLATED_DIFF: "AI Governance",
+  HITL: "AI Governance",
+};
+const STATUS_ICON: Record<string, string> = {
+  PASS: "✅", WARN: "⚠", FAIL: "✗", UNKNOWN: "?",
+};
+const STATUS_BADGE: Record<string, string> = {
+  PASS: "badge-pass", WARN: "badge-warn", FAIL: "badge-fail", UNKNOWN: "badge-unknown",
+};
+
+function findingCard(f: GovernanceFinding): string {
+  const badgeCls = STATUS_BADGE[f.status] ?? "badge-unknown";
+  const icon = STATUS_ICON[f.status] ?? "?";
+  return `<div class="finding-card">
+  <div class="finding-title">
+    <span class="badge ${badgeCls}">${escHtml(icon)} ${escHtml(f.status)}</span>
+    ${escHtml(f.title)}
+  </div>
+  <div class="finding-desc">${escHtml(f.description)}</div>
+  <div class="finding-provenance">provenance: ${escHtml(f.provenance)}</div>
+</div>`;
+}
+
+function auditSection(report?: GovernanceReport): string {
+  const formHtml = `
+<h2>Governance Audit</h2>
+<div class="audit-form">
+  <div>
+    <label for="audit-org">GitHub org or owner/repo</label>
+    <input type="text" id="audit-org" placeholder="e.g. tiangolo/fastapi" value="${report ? escHtml(report.org) : ""}" />
+  </div>
+  <div>
+    <label for="audit-token">GitHub token (optional)</label>
+    <input type="text" id="audit-token" placeholder="ghp_… or set GITHUB_TOKEN" />
+  </div>
+  <button class="action" id="btn-audit">Run audit</button>
+</div>`;
+
+  if (!report) {
+    return `${formHtml}<div class="empty-state">Enter a GitHub org or repo above and click <strong>Run audit</strong>.</div>`;
+  }
+
+  const fail = report.findings.filter(f => f.status === "FAIL").length;
+  const warn = report.findings.filter(f => f.status === "WARN").length;
+  const pass = report.findings.filter(f => f.status === "PASS").length;
+
+  const summaryHtml = `<div class="audit-summary-row">
+  <div class="audit-stat"><div class="val" style="color:#e53e3e">${fail}</div><div class="lbl">Failures</div></div>
+  <div class="audit-stat"><div class="val" style="color:#dd6b20">${warn}</div><div class="lbl">Warnings</div></div>
+  <div class="audit-stat"><div class="val" style="color:#38a169">${pass}</div><div class="lbl">Passing</div></div>
+  <div class="audit-stat"><div class="val">${report.repositories.length}</div><div class="lbl">Repos</div></div>
+</div>`;
+
+  const grouped: Record<string, GovernanceFinding[]> = {};
+  for (const f of report.findings) {
+    const sec = CHECK_SECTION[f.check] ?? "Other";
+    if (!grouped[sec]) grouped[sec] = [];
+    grouped[sec].push(f);
+  }
+
+  const sectionsHtml = SECTION_ORDER
+    .filter(s => grouped[s] && grouped[s].length > 0)
+    .map(s => `<div class="audit-section-header">${escHtml(s)}</div>
+${grouped[s].map(findingCard).join("")}`)
+    .join("");
+
+  return `${formHtml}${summaryHtml}${sectionsHtml || '<div class="empty-state">No findings.</div>'}`;
 }
 
 // ── Graph tab ─────────────────────────────────────────────────────────────────
@@ -869,7 +996,7 @@ function script(state: PanelState): string {
   const vscode = acquireVsCodeApi();
 
   // ── Tab switching (pure client-side, no host round-trip) ──────────────────
-  const tabs = ['overview', 'impact', 'graph'];
+  const tabs = ['overview', 'impact', 'graph', 'audit'];
 
   function showTab(name) {
     tabs.forEach(function(t) {
@@ -929,6 +1056,19 @@ function script(state: PanelState): string {
       var from = useAdvanced ? advancedFrom : ('HEAD~' + stepperVal);
       var to   = useAdvanced ? (advancedTo || 'HEAD') : 'HEAD';
       vscode.postMessage({ type: 'impact', from: from, to: to });
+    });
+  }
+
+  // ── Audit run ──────────────────────────────────────────────────────────────
+  var btnAudit = document.getElementById('btn-audit');
+  if (btnAudit) {
+    btnAudit.addEventListener('click', function() {
+      var orgInput   = document.getElementById('audit-org');
+      var tokenInput = document.getElementById('audit-token');
+      var org   = orgInput   ? orgInput.value.trim()   : '';
+      var token = tokenInput ? tokenInput.value.trim() : '';
+      if (!org) { orgInput && orgInput.focus(); return; }
+      vscode.postMessage({ type: 'audit', org: org, token: token });
     });
   }
 
