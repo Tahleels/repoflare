@@ -33,6 +33,7 @@ from repoflare_core.impact.analyzer import ImpactAnalyzer
 from repoflare_core.parsing.adapter import ParserAdapter, module_qualified_name
 from repoflare_core.parsing.resolver import CallImportResolver
 from repoflare_core.parsing.test_resolver import TestLinkResolver
+from repoflare_core.remote.workspace import RepoRef, cloned_workspace
 from repoflare_core.retrieval.context_retriever import ContextRetriever
 from repoflare_core.retrieval.prompt import format_explain_prompt
 from repoflare_core.scanning.scanner import RepositoryScanner
@@ -101,7 +102,11 @@ class AnalyzeResult:
     test_edge_count: int
 
 
-def run_analyze(root: Path) -> AnalyzeResult:
+def run_analyze(root: Path, *, max_files: int | None = None) -> AnalyzeResult:
+    """`max_files` bounds how many files are parsed. The CLI leaves it None (unbounded, as
+    it always has been); the hosted API sets it, because a single request there has to
+    finish inside a fixed instance's memory and time budget — see `run_remote_analysis`.
+    """
     db_path = graph_db_path(root)
     if not db_path.exists():
         raise NotInitializedError(str(root))
@@ -116,7 +121,7 @@ def run_analyze(root: Path) -> AnalyzeResult:
     # Two passes: (1) parse every file and insert structural (CONTAINS) nodes/edges, since
     # (2) resolving CALLS/IMPORTS/TESTED_BY needs a snapshot-wide lookup that isn't
     # available until every file's symbols are known — see parsing/resolver.py.
-    scanned_files = list(RepositoryScanner(root).scan())
+    scanned_files = list(RepositoryScanner(root, max_files=max_files).scan())
     parsed = [(f, parser.parse(f, snapshot_id)) for f in scanned_files]
 
     node_id_by_qualified_name = {
@@ -404,3 +409,92 @@ def run_explain(root: Path, from_ref: str, to_ref: str = "HEAD") -> str | None:
         CacheProvider(store.raw_connection()).set(cache_key, {"text": explanation})
 
     return explanation
+
+
+# ---------------------------------------------------------------------------
+# Remote repositories (cloned server-side) — used only by the hosted API (api/)
+# ---------------------------------------------------------------------------
+
+# Shallow, but not depth 1: `impact`/`explain` compare two refs, so a one-commit checkout
+# would make the single most interesting question ("what did the last commit affect?")
+# unanswerable. 50 is enough history for that without paying for the full clone.
+DEFAULT_REMOTE_CLONE_DEPTH = 50
+
+# A hosted request has to finish inside one instance's fixed memory and time budget, and
+# run_analyze holds every scanned file's source and parse result in memory simultaneously —
+# so a big repository is refused outright instead of being OOM-killed halfway through.
+DEFAULT_REMOTE_MAX_FILES = 400
+
+
+def _materialize_graph(root: Path, max_files: int | None) -> AnalyzeResult:
+    """`init` then `analyze`, in that order — the same two steps the CLI runs against a local
+    path. A fresh checkout has no `.repoflare/` yet, and run_analyze refuses to invent one.
+    """
+    run_init(root)
+    return run_analyze(root, max_files=max_files)
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteAnalysis:
+    repo_slug: str
+    clone_url: str
+    head_sha: str | None
+    status: StatusResult
+    analyze: AnalyzeResult
+    impact: ImpactSummary | None
+
+
+def run_remote_analysis(
+    ref: RepoRef,
+    *,
+    from_ref: str | None = None,
+    to_ref: str = "HEAD",
+    depth: int = DEFAULT_REMOTE_CLONE_DEPTH,
+    max_files: int | None = DEFAULT_REMOTE_MAX_FILES,
+) -> RemoteAnalysis:
+    """Clone `ref`, build its graph, and — when `from_ref` is given — categorize what that
+    ref range affects.
+
+    A hosted instance cannot see the caller's disk, so the checkout is what replaces "the
+    path the CLI was handed". Nothing else changes: this runs the same
+    run_init/run_analyze/run_impact the CLI runs, on the same code, which is the whole point
+    of the single service layer (see this module's docstring).
+
+    Raises RemoteRepoError (unclonable/invalid repo), RepositoryTooLargeError (file cap),
+    plus whatever run_impact documents (bad ref, etc.).
+    """
+    with cloned_workspace(ref, depth=depth) as root:
+        analyze_result = _materialize_graph(root, max_files)
+        status_result = run_status(root)
+        impact = run_impact(root, from_ref, to_ref) if from_ref is not None else None
+        head_sha = _current_commit_sha_if_git_repo(root)
+
+    return RemoteAnalysis(
+        repo_slug=ref.slug,
+        clone_url=ref.clone_url,
+        head_sha=head_sha,
+        status=status_result,
+        analyze=analyze_result,
+        impact=impact,
+    )
+
+
+def run_remote_explain(
+    ref: RepoRef,
+    from_ref: str,
+    to_ref: str = "HEAD",
+    *,
+    depth: int = DEFAULT_REMOTE_CLONE_DEPTH,
+    max_files: int | None = DEFAULT_REMOTE_MAX_FILES,
+) -> str | None:
+    """The AI counterpart of `run_remote_analysis`: same checkout and graph, then the
+    grounded-explanation pass. Returns None when the ref range has no changed files.
+
+    The CacheProvider in run_explain is keyed inside the checkout's own DuckDB file, which
+    is deleted when the request ends — so a hosted explain never gets a cache hit, and every
+    call reaches the AI provider. Making that cache survive would require a persistent disk,
+    which the free instance type does not offer (see docs/DECISIONS.md).
+    """
+    with cloned_workspace(ref, depth=depth) as root:
+        _materialize_graph(root, max_files)
+        return run_explain(root, from_ref, to_ref)

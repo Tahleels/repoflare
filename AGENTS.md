@@ -98,6 +98,15 @@ core/
                             parsing -> graph -> change -> impact -> retrieval -> ai get
                             wired together. cli/ and rpc/ both call this and hold no
                             orchestration logic themselves — see docs/ARCHITECTURE.md §2.
+                            Remote orchestration added this session: run_remote_analysis /
+                            run_remote_explain clone a public GitHub repo (see remote/) and
+                            run the identical pipeline against it, plus
+                            DEFAULT_REMOTE_CLONE_DEPTH=50 and DEFAULT_REMOTE_MAX_FILES=400.
+                            run_analyze gained an optional keyword-only max_files.
+    serialization.py        to_jsonable() — promoted out of rpc/server.py this session so
+                            the HTTP API and the VS Code extension encode service.py's
+                            dataclass/Enum/Path/datetime results identically rather than
+                            drifting apart.
     cli/                    Typer commands: init, analyze, status, impact, explain — thin
                             wrappers over service.py: format/print its results, map its
                             exceptions (NotInitializedError, NotAnalyzedError,
@@ -120,6 +129,30 @@ core/
                             -32005 AI call failed, plus standard -32600/-32601/-32700.
                             `python -m repoflare_core.rpc` is the entry point the VS Code
                             extension will spawn as a subprocess (__main__.py).
+    api/                    HTTP layer over service.py (new this session) — the hosted demo
+                            + JSON API, and a third thin front door alongside cli/ and rpc/.
+                            server.py: hand-rolled routing over stdlib
+                            http.server.ThreadingHTTPServer, no web framework (see its
+                            module docstring for why, and why it is *threaded*).
+                            Endpoints: /healthz, /, /report, /api/v1/{analyze,impact,explain}.
+                            Takes a RemoteAnalysisOperations Protocol (the ai/provider.py
+                            BobProvider pattern), so tests inject a fake and never clone.
+                            Exceptions map to HTTP status: 400 bad repo/ref, 413 repo too
+                            large, 502 AI call failed, 503 no provider configured, 500
+                            otherwise — and 5xx bodies never echo internal exception text.
+                            page.py: render_demo_page() — pure, escape-everything, no
+                            external assets (same discipline as export/html.py + webview.ts).
+                            `python -m repoflare_core.api` binds 0.0.0.0:$PORT; that is the
+                            command render.yaml runs.
+    remote/                 workspace.py — cloned_workspace() + parse_public_github_ref():
+                            the only place a remote repository is fetched, and the SSRF
+                            boundary for it (github.com owner/name only; everything else
+                            raises RemoteRepoError — a public endpoint forwarding user input
+                            to `git clone` would otherwise reach internal hosts or file://
+                            URLs). Shallow single-branch clone into mktemp, git credential
+                            prompts disabled, unconditional cleanup that also clears git's
+                            read-only object files. RepoRef is deliberately *unvalidated* so
+                            tests can point it at a local path.
     export/                 render_html (html.py) — pure function producing a self-
                             contained static HTML report (repo overview + optional impact
                             view). Mirrors extension/src/webview.ts's escape-everything
@@ -136,16 +169,17 @@ core/
                             overwrite, TTL, expiry pruning, and the cache-hit short-circuit
                             in run_explain end-to-end.
     config/                 Shared .repoflare/graph.duckdb path resolution
-  tests/                    184 tests, all passing (1 skipped on Windows — symlink test):
+  tests/                    251 tests, all passing (1 skipped on Windows — symlink test):
                             test_ids, test_scanner, test_parser_adapter,
                             test_call_import_resolver, test_test_resolver, test_graph_store,
                             test_traversal, test_change_detector, test_impact_analyzer,
                             test_ai_providers, test_ai_factory, test_context_retriever,
                             test_service, test_rpc_protocol, test_rpc_server, test_export_html,
-                            test_cli, test_cache_provider
+                            test_cli, test_cache_provider, test_remote_workspace,
+                            test_api_page, test_api_server
 ```
 
-Verified: `cd core && uv sync && uv run pytest -q` → 184 passed, 1 skipped. `uv run ruff check src tests`
+Verified: `cd core && uv sync && uv run pytest -q` → 251 passed, 1 skipped. `uv run ruff check src tests`
 → clean. `uv run ruff format src tests` → clean. `uv run mypy src` (strict mode) → clean. `impact` and `explain` were both
 smoke-tested end-to-end in throwaway git repos, INCLUDING `explain` against a real, live
 `GEMINI_API_KEY` — genuinely calls Gemini and prints a real explanation; encoding fix
@@ -164,6 +198,30 @@ The CLI refactor onto service.py was verified to change zero observable CLI beha
 full pre-existing CLI test suite (all output-string assertions) passed unmodified except for
 two monkeypatch targets that had to move to their new location
 (`repoflare_core.service.default_bob_provider`, not `repoflare_core.cli.main.*`).
+
+`api/` + `remote/` (this session) were verified three ways, and are deployable to Render as a
+**free** web service via `render.yaml` at the repo root (`rootDir: core`, `plan: free`,
+`uv sync --frozen --no-dev`, health check `/healthz`) plus `core/.python-version` (3.12.6,
+matching the local venv so Render does not default to 3.14.x, which duckdb/tree-sitter may not
+publish wheels for):
+
+1. 67 new tests, covering the whole remote pipeline end-to-end against a real *local* git
+   repository (git clones local paths, so no network is needed) and the HTTP contract over a
+   real listening socket.
+2. The actual `python -m repoflare_core.api` process was spawned and driven over real HTTP —
+   `/healthz`, `/`, a real `git clone` of `pallets/flask` (83 files, 633 symbols, 985 nodes,
+   1008 edges, 31s) and a real impact run that returned DIRECT + INDIRECT for
+   `src/flask/app.py` (72s).
+3. `render.yaml` parsed with PyYAML, and `uv sync --frozen` re-checked, so the lockfile Render
+   builds from is byte-identical to the committed one.
+
+**Measured performance — read this before demoing the hosted URL.** `run_analyze` costs roughly
+0.2–0.6s *per file* (15 files → 4.2s, 83 → 16.5s, 91 → 51.7s) while a shallow network clone is
+only 2.6s. `run_impact` is fast when few nodes are affected (0.1s at 15 files) but slow when one
+changed file has large fan-out (~50s for `src/flask/app.py`). On the free plan (0.1 CPU) multiply
+those by roughly 5–15×, so **only small repositories are practical for the hosted demo** — which
+is why `api/page.py` orders its examples smallest-first and says so on the page. Both costs are
+pre-existing core characteristics, not introduced by the web layer (see "Next up" items 2 and 3).
 
 `export/html.py::render_html` is a pure function (state in, HTML string out) producing a
 self-contained static report — mirrors `extension/src/webview.ts`'s approach deliberately,
@@ -302,7 +360,39 @@ what's actually left.
    prints each category label in a distinct color (red/yellow/blue/green). Nav bar always
    visible in all webview states. Friendly first-run state in overview when not yet analyzed.
 
-Only one item left: item 1 (CALLS/IMPORTS extension) above.
+7. ~~**Hosted HTTP API + free Render deployment**~~ Done — see `api/`, `remote/` and
+   "Current state" above. `render.yaml` (repo root) + `core/.python-version` deploy
+   `python -m repoflare_core.api` on Render's free plan. **Applying it is still a manual
+   step**: someone with access to the Render account must create the Blueprint from the
+   dashboard (Dashboard → New → Blueprint → pick `Tahleels/repoflare`), where the
+   `sync: false` keys (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`) are prompted for and never
+   committed. After that, any `git push` to `main` redeploys automatically.
+
+8. **`run_analyze` costs ~0.2–0.6s per file — the biggest product-speed win available.**
+   Measured: 15 files → 4.2s, 83 → 16.5s, 91 → 51.7s, against a 2.6s network clone. The
+   two-pass parse-then-resolve shape is deliberate and nothing is obviously wrong on
+   inspection, so **profile before guessing**; the likely candidates are
+   `graph/store.py::insert_nodes`/`insert_edges` being called once per file (a transaction or
+   commit per call) and `ParserAdapter`'s per-file setup. This speeds up the CLI and the
+   extension as much as the hosted API.
+
+9. **`service.py::_node_summaries` looks like an N+1 query.** It calls `store.get_node()` once
+   per affected node — invisible at a small fan-out (0.1s at 15 files), ~50s when one changed
+   file affects hundreds of nodes (`src/flask/app.py`). A single `WHERE node_id IN (...)`
+   lookup should collapse it. Confirm by profiling first.
+
+10. **Demo-URL hosting — GitHub Pages is already live; decide what is canonical.**
+    `https://tahleels.github.io/repoflare/` returns 200 and serves a real
+    `repoflare export-html` artifact (the API reports `has_pages: true`). Two copies are now
+    committed — root `index.html` (what is actually served) and `docs/index.html` (for
+    branch-based Pages sources) — plus the older `core/docs/index.html`, which GitHub Pages
+    can never serve because it only accepts `/` or `/docs` at the repo root. Three copies of
+    one report will drift; pick the root one, drop the rest, and regenerate only when the
+    report changes. The Render URL from item 7 is a *different* thing (live analysis, not a
+    static report) — decide which one goes in the submission's Demo Application URL field.
+
+Items 1 and 8–10 are the open work. 8 and 9 are the ones that most affect how the product
+feels.
 
 Whichever you pick, update this file's "Current state" and "Next up" sections when you're
 done, so the next agent (or the next Bob session) picks up from an accurate baseline instead

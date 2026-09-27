@@ -117,6 +117,36 @@ npm test
 
 ---
 
+### 4. Hosted Web API (the live demo URL)
+
+The same Python core also serves an HTTP API, and that is what gets deployed for the hackathon's
+required **Demo Application URL**. A hosted process can't read your disk, so it clones a public
+GitHub repository on demand and runs the identical `init → analyze → impact` pipeline on it.
+
+```bash
+cd core
+uv run python -m repoflare_core.api     # then open http://127.0.0.1:8000/
+```
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /` | The demo page (a plain GET form, no JavaScript) |
+| `GET /healthz` | Liveness probe |
+| `GET /api/v1/analyze?repo=owner/name` | Snapshot plus file/symbol/test/edge counts |
+| `GET /api/v1/impact?repo=&from=REF&to=REF` | Changed files and affected nodes by category |
+| `GET /api/v1/explain?repo=&from=REF&to=REF` | Grounded AI explanation (needs an API key) |
+| `GET /report?repo=&from=REF&to=REF` | Standalone HTML report |
+
+**Deploying to Render (free plan):** `render.yaml` at the repo root is a Render Blueprint that
+runs the command above on Render's free instance type (0.1 CPU / 512 MB). In the
+[Render Dashboard](https://dashboard.render.com) choose **New → Blueprint**, select
+`Tahleels/repoflare`, and apply — Render builds with `uv sync --frozen --no-dev` and
+health-checks `/healthz`. The `sync: false` API keys are prompted for in the dashboard and are
+never stored in this repo. Full details, including what the free plan's spin-down and ephemeral
+filesystem mean for a live demo, are in [`HOW_TO_RUN.md`](HOW_TO_RUN.md) §4.
+
+---
+
 ## 📚 Documentation Links
 
 - **Plain Words Overview:** [`PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md)

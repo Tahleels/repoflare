@@ -22,11 +22,8 @@ Error codes (JSON-RPC "error.code"), beyond the standard -32700/-32600/-32601/-3
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from collections.abc import Callable
-from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import IO, Any
 
@@ -35,6 +32,7 @@ from repoflare_core.ai.provider import BobProviderError
 from repoflare_core.change.git_adapter import GitCommandError
 from repoflare_core.governance.github import GitHubAPIError
 from repoflare_core.rpc.protocol import MalformedMessageError, read_message, write_message
+from repoflare_core.serialization import to_jsonable
 from repoflare_core.service import (
     NotAnalyzedError,
     NotInitializedError,
@@ -68,24 +66,9 @@ _ERROR_CODE_BY_EXCEPTION: dict[type[Exception], int] = {
 }
 
 
-def _to_jsonable(value: Any) -> Any:
-    """Recursively convert dataclasses/Path/Enum/datetime values from service.py's result
-    types into plain JSON-serializable structures."""
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return {f.name: _to_jsonable(getattr(value, f.name)) for f in dataclasses.fields(value)}
-    if isinstance(value, datetime):
-        # GovernanceReport.generated_at and friends: isoformat() matches what the
-        # extension's TS interfaces declare (generated_at: string).
-        return value.isoformat()
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, dict):
-        return {k: _to_jsonable(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_to_jsonable(v) for v in value]
-    return value
+# Kept as an alias so this module's existing call sites (and the regression note in
+# tests/test_rpc_server.py) keep referring to the same, now-shared, encoder.
+_to_jsonable = to_jsonable
 
 
 def _resolve_path(params: dict[str, Any]) -> Path:

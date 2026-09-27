@@ -25,6 +25,23 @@ _ALWAYS_IGNORED_DIRS = frozenset(
 )
 
 
+class RepositoryTooLargeError(RuntimeError):
+    """Raised when a repository exceeds the caller's file cap.
+
+    Deliberately an error rather than a silent truncation: a graph built from an arbitrary
+    subset of a repository would still answer `impact` questions, just *wrongly and
+    confidently*. See service.py's remote orchestration, where this cap keeps a hosted
+    request bounded.
+    """
+
+    def __init__(self, max_files: int) -> None:
+        super().__init__(
+            f"repository has more than {max_files} supported source files "
+            f"(cap: {max_files}) — analyse it locally with the CLI instead"
+        )
+        self.max_files = max_files
+
+
 @dataclass(frozen=True, slots=True)
 class ScannedFile:
     relative_path: str
@@ -35,8 +52,9 @@ class ScannedFile:
 
 
 class RepositoryScanner:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, max_files: int | None = None) -> None:
         self._root = root
+        self._max_files = max_files
         self._gitignore = self._load_gitignore(root)
 
     @staticmethod
@@ -56,7 +74,11 @@ class RepositoryScanner:
         Files are yielded in sorted path order (deterministic across runs). Files that
         cannot be decoded as UTF-8, or that belong to an always-ignored directory, are
         silently skipped.
+
+        With `max_files` set, exceeding the cap raises RepositoryTooLargeError instead of
+        stopping early — see that exception's docstring for why.
         """
+        yielded = 0
         for path in sorted(self._root.rglob("*")):
             if not path.is_file():
                 continue
@@ -79,6 +101,9 @@ class RepositoryScanner:
                 content = path.read_text(encoding="utf-8-sig")
             except (UnicodeDecodeError, OSError):
                 continue
+            if self._max_files is not None and yielded >= self._max_files:
+                raise RepositoryTooLargeError(self._max_files)
+            yielded += 1
             yield ScannedFile(
                 relative_path=relative_posix,
                 absolute_path=path,

@@ -94,3 +94,36 @@ and is noted here to avoid future confusion.
 
 **Changes at scale:** Additional providers (Anthropic, OpenAI, a self-hosted model) are
 additional `BobProvider` implementations; nothing above the interface changes.
+
+---
+
+## ADR-005: Hosted HTTP surface, and deploying on Render's free tier
+
+**Decision:** A third thin front door — `api/` — over `service.py`, hand-rolled on stdlib
+`http.server.ThreadingHTTPServer` with no web framework, deployed as a Render **Blueprint**
+(`render.yaml` at the repo root: `rootDir: core`, `plan: free`, `uv sync --frozen --no-dev`,
+health check `/healthz`, plus `core/.python-version` pinning 3.12.6). The hosted API is
+*stateless per request*: each call clones the requested public GitHub repository into a temp
+directory (`remote/workspace.py`), runs the identical `init → analyze → impact` pipeline, and
+deletes the clone.
+
+**Why:** The hackathon requires a live Demo Application URL, but RepoFlare is a local tool —
+its value is reading *your* repository, which a hosted process cannot do. Cloning on demand
+keeps the hosted surface honest: it exercises the same `service.py` code path the CLI and the
+extension run rather than a parallel implementation, and it stays inside a free instance's
+ephemeral single-container limits. Hand-rolled routing instead of Flask/FastAPI keeps the
+dependency set at stdlib-only, which matters more than usual because Render builds with
+`uv sync --frozen` — any new dependency is a `uv.lock` change the build must agree with.
+`ThreadingHTTPServer` was chosen specifically so `/healthz` keeps answering while a long
+analysis runs, since an unresponsive health check gets the instance killed. Free tier over
+paying because the demo is judged, not operated: spin-down and 0.1 CPU are acceptable for a
+link in a submission form, provided the demo page steers judges to the smallest example
+repository first (`run_analyze` costs ~0.2–0.6s per file, so the free plan makes only small
+repositories practical).
+
+**Changes at scale:** Moving to a paid instance is `plan: professional` in `render.yaml` and
+nothing else. The first real change should be the stateless-per-request design: persist
+analyses keyed by `(repo, ref, graph hash)` so repeat demo clicks are instant — the same idea
+`cache/provider.py` already proves for AI responses, extended from prompt results to whole
+analysis runs. The `RemoteAnalysisOperations` Protocol in `api/server.py` is the seam where a
+job-queue implementation would slot in without touching the routes.

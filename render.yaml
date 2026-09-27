@@ -1,0 +1,37 @@
+# Render Blueprint for RepoFlare's HTTP API — see core/src/repoflare_core/api/.
+#
+# To deploy: Render Dashboard -> New -> Blueprint, select the Tahleels/repoflare repository,
+# and Render reads this file. Everything here runs on `plan: free` (0.1 CPU / 512 MB RAM).
+#
+# Read that plan's limits before demoing, because they shape the product experience:
+#   * The instance spins down after 15 minutes without traffic, and the next request takes
+#     roughly a minute to wake. Render shows its own loading page while that happens.
+#   * The filesystem is ephemeral, so each request clones its own checkout and throws it away;
+#     nothing is cached between requests (see the note in service.py's run_remote_explain).
+#   * Bandwidth and build minutes count against the workspace's monthly included amounts.
+#
+# Values deliberately NOT set here, because the in-code defaults already suit this plan:
+#   REPOFLARE_MAX_FILES (400), REPOFLARE_CLONE_DEPTH (50), REPOFLARE_MAX_CONCURRENCY (2).
+
+services:
+  - type: web
+    name: repoflare-api
+    runtime: python
+    plan: free
+    region: oregon
+    # The Python core lives in core/, which is also where uv.lock is — that is what makes
+    # Render install uv and use it for this service.
+    rootDir: core
+    buildCommand: uv sync --frozen --no-dev
+    startCommand: uv run --frozen --no-dev python -m repoflare_core.api
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # Optional, and the only reason to set either: without one, /api/v1/explain answers 503
+      # while every other endpoint keeps working, because init/analyze/impact are fully
+      # deterministic and never call a model. `sync: false` means Render prompts for the value
+      # in its dashboard and never stores it in this repository.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
