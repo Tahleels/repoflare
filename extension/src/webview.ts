@@ -168,7 +168,53 @@ function styles(): string {
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 0.88em; }
   th { color: var(--vscode-descriptionForeground); font-weight: 700; text-transform: uppercase; font-size: 0.78em; letter-spacing: 0.05em; }
   .filepath { font-family: var(--vscode-editor-font-family, monospace); color: var(--vscode-textLink-foreground); }
-  .snap-id { font-family: monospace; font-size: 0.85em; background: var(--vscode-editor-inactiveSelectionBackground); padding: 2px 6px; border-radius: 4px; }
+  /* commit stepper */
+  .commit-stepper {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .commit-stepper label { font-size: 0.88em; color: var(--vscode-foreground); font-weight: 500; }
+  .stepper-control { display: flex; align-items: center; gap: 6px; }
+  .stepper-btn {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: none; border-radius: 4px;
+    width: 26px; height: 26px;
+    font-size: 1.1em; font-weight: 700;
+    cursor: pointer; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 0.12s;
+  }
+  .stepper-btn:hover { opacity: 0.8; }
+  .stepper-val {
+    min-width: 32px; text-align: center;
+    font-size: 1.15em; font-weight: 700;
+    color: var(--vscode-foreground);
+  }
+  .stepper-preview {
+    font-size: 0.82em;
+    color: var(--vscode-descriptionForeground);
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    border-radius: 5px;
+    padding: 4px 10px;
+  }
+  .stepper-preview code {
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-textLink-foreground);
+    font-size: 1em;
+  }
+  details.impact-advanced { margin-top: 10px; }
+  details.impact-advanced summary {
+    font-size: 0.8em;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 6px;
+  }
+  details.impact-advanced summary:hover { color: var(--vscode-foreground); }
   .spinner { color: var(--vscode-descriptionForeground); padding: 32px 0; }
   .error-box {
     background: var(--vscode-inputValidation-errorBackground);
@@ -351,13 +397,8 @@ function overviewSection(status: StatusResult, root: string): string {
 </div>`;
   }
 
-  const snapLine = `<span class="snap-id">${escHtml(status.snapshot_id)}</span>`;
-
   return `
 <div class="muted" style="margin-bottom:var(--gap)">${escHtml(root)}</div>
-
-<h2>Snapshot</h2>
-<div style="margin-bottom:var(--gap)">${snapLine}</div>
 
 <div class="stat-row">
   ${statCard(String(status.node_count), "Nodes")}
@@ -366,7 +407,7 @@ function overviewSection(status: StatusResult, root: string): string {
 
 <h2>Actions</h2>
 <div class="analyze-card">
-  <p>Re-scans every Python, TypeScript, and JavaScript file and rebuilds the dependency graph. The current snapshot will be replaced.</p>
+  <p>Re-scans every Python, TypeScript, and JavaScript file and rebuilds the dependency graph.</p>
   <button class="action" id="btn-analyze">Re-analyze repository</button>
 </div>
 `;
@@ -378,15 +419,36 @@ function impactSection(
   result?: { from: string; to: string; impact: ImpactSummary }
 ): string {
   const resultsHtml = result ? impactResultsHtml(result.from, result.to, result.impact) : "";
+  // Detect if last result used a non-stepper ref so we can pre-open advanced
+  const isAdvanced = result && !/^HEAD~\d+$/.test(result.from);
+  const advancedOpen = isAdvanced ? " open" : "";
 
   return `
 <h2>Impact analysis</h2>
 <div class="impact-form">
-  <label for="from-ref">From ref</label>
-  <input class="ref-input" id="from-ref" placeholder="HEAD~1" value="${result ? escHtml(result.from) : ""}" />
-  <label for="to-ref">To ref</label>
-  <input class="ref-input" id="to-ref" placeholder="HEAD" value="${result ? escHtml(result.to) : ""}" />
-  <button class="action" id="btn-impact">Run impact</button>
+  <div class="commit-stepper">
+    <label for="commit-count">Compare last</label>
+    <div class="stepper-control">
+      <button class="stepper-btn" id="stepper-minus" type="button" aria-label="Fewer commits">−</button>
+      <span class="stepper-val" id="stepper-val">1</span>
+      <button class="stepper-btn" id="stepper-plus" type="button" aria-label="More commits">+</button>
+    </div>
+    <label for="commit-count">commit${result ? "" : "s"}</label>
+  </div>
+  <div class="stepper-preview" id="stepper-preview">
+    Will compare <code id="preview-from">HEAD~1</code> → <code>HEAD</code>
+  </div>
+  <button class="action" id="btn-impact" style="margin-top:8px">Run impact</button>
+
+  <details class="impact-advanced"${advancedOpen}>
+    <summary>Advanced: specify git refs manually</summary>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label class="muted" for="from-ref">From</label>
+      <input class="ref-input" id="from-ref" placeholder="HEAD~1" value="${result && isAdvanced ? escHtml(result.from) : ""}" />
+      <label class="muted" for="to-ref">To</label>
+      <input class="ref-input" id="to-ref" placeholder="HEAD" value="${result && isAdvanced ? escHtml(result.to) : ""}" />
+    </div>
+  </details>
 </div>
 <div id="impact-results-container">${resultsHtml}</div>
 `;
@@ -833,13 +895,39 @@ function script(state: PanelState): string {
     });
   }
 
-  // ── Impact form ────────────────────────────────────────────────────────────
+  // ── Impact form stepper ────────────────────────────────────────────────────
+  var stepperVal = 1;
+  var stepperValEl  = document.getElementById('stepper-val');
+  var previewFromEl = document.getElementById('preview-from');
+  var minusBtn = document.getElementById('stepper-minus');
+  var plusBtn  = document.getElementById('stepper-plus');
+
+  function updateStepper() {
+    if (stepperValEl)  stepperValEl.textContent  = String(stepperVal);
+    if (previewFromEl) previewFromEl.textContent = 'HEAD~' + stepperVal;
+  }
+  if (minusBtn) minusBtn.addEventListener('click', function() {
+    if (stepperVal > 1) { stepperVal--; updateStepper(); }
+  });
+  if (plusBtn) plusBtn.addEventListener('click', function() {
+    if (stepperVal < 50) { stepperVal++; updateStepper(); }
+  });
+  updateStepper();
+
+  // ── Impact run ─────────────────────────────────────────────────────────────
   var btnImpact = document.getElementById('btn-impact');
   if (btnImpact) {
     btnImpact.addEventListener('click', function() {
-      var from = document.getElementById('from-ref').value.trim();
-      var to   = document.getElementById('to-ref').value.trim() || 'HEAD';
-      if (!from) { return; }
+      // If the advanced section is open and has values, use those; else use the stepper.
+      var advDetails = document.querySelector('details.impact-advanced');
+      var fromInput = document.getElementById('from-ref');
+      var toInput   = document.getElementById('to-ref');
+      var advancedFrom = fromInput ? fromInput.value.trim() : '';
+      var advancedTo   = toInput   ? toInput.value.trim()   : '';
+      var useAdvanced  = advDetails && advDetails.open && advancedFrom;
+
+      var from = useAdvanced ? advancedFrom : ('HEAD~' + stepperVal);
+      var to   = useAdvanced ? (advancedTo || 'HEAD') : 'HEAD';
       vscode.postMessage({ type: 'impact', from: from, to: to });
     });
   }
