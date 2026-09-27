@@ -13,7 +13,7 @@
  *   - "impact"   — queries impact for the given refs
  */
 
-import { StatusResult, ImpactSummary, GraphOverview, GraphNode } from "./rpc";
+import { StatusResult, ImpactSummary, GraphOverview, GraphNode, GovernanceReport, GovernanceFinding } from "./rpc";
 
 // ── State union for the renderer ──────────────────────────────────────────────
 
@@ -32,9 +32,11 @@ export type PanelState =
       /** The graph data — null until graphOverview has been fetched. */
       graph: GraphOverview | null;
       /** Active tab to open initially. */
-      activeTab: "overview" | "impact" | "graph" | "analyze";
+      activeTab: "overview" | "impact" | "graph" | "analyze" | "audit";
       /** Impact results to pre-populate, if any. */
       impactResult?: { from: string; to: string; impact: ImpactSummary };
+      /** Governance audit result, if any. */
+      auditResult?: GovernanceReport;
     };
 
 // ── Entry point ────────────────────────────────────────────────────────────────
@@ -168,7 +170,53 @@ function styles(): string {
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border); font-size: 0.88em; }
   th { color: var(--vscode-descriptionForeground); font-weight: 700; text-transform: uppercase; font-size: 0.78em; letter-spacing: 0.05em; }
   .filepath { font-family: var(--vscode-editor-font-family, monospace); color: var(--vscode-textLink-foreground); }
-  .snap-id { font-family: monospace; font-size: 0.85em; background: var(--vscode-editor-inactiveSelectionBackground); padding: 2px 6px; border-radius: 4px; }
+  /* commit stepper */
+  .commit-stepper {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .commit-stepper label { font-size: 0.88em; color: var(--vscode-foreground); font-weight: 500; }
+  .stepper-control { display: flex; align-items: center; gap: 6px; }
+  .stepper-btn {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: none; border-radius: 4px;
+    width: 26px; height: 26px;
+    font-size: 1.1em; font-weight: 700;
+    cursor: pointer; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 0.12s;
+  }
+  .stepper-btn:hover { opacity: 0.8; }
+  .stepper-val {
+    min-width: 32px; text-align: center;
+    font-size: 1.15em; font-weight: 700;
+    color: var(--vscode-foreground);
+  }
+  .stepper-preview {
+    font-size: 0.82em;
+    color: var(--vscode-descriptionForeground);
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    border-radius: 5px;
+    padding: 4px 10px;
+  }
+  .stepper-preview code {
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-textLink-foreground);
+    font-size: 1em;
+  }
+  details.impact-advanced { margin-top: 10px; }
+  details.impact-advanced summary {
+    font-size: 0.8em;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 6px;
+  }
+  details.impact-advanced summary:hover { color: var(--vscode-foreground); }
   .spinner { color: var(--vscode-descriptionForeground); padding: 32px 0; }
   .error-box {
     background: var(--vscode-inputValidation-errorBackground);
@@ -263,6 +311,47 @@ function styles(): string {
     margin-top: 4px;
   }
   .analyze-card p { margin: 0 0 14px; font-size: 0.92em; line-height: 1.6; }
+  /* Audit tab */
+  .audit-form {
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: var(--radius-card);
+    padding: 14px 16px;
+    margin-bottom: var(--gap);
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+  }
+  .audit-form label { font-size: 0.82em; color: var(--vscode-descriptionForeground); font-weight: 600; display: block; margin-bottom: 3px; }
+  .audit-form input[type=text] {
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: var(--radius-btn);
+    padding: 6px 10px; font-size: 0.88em; width: 200px;
+  }
+  .finding-card {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: var(--radius-card);
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    background: var(--vscode-editor-inactiveSelectionBackground);
+  }
+  .finding-title { font-weight: 600; font-size: 0.92em; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+  .finding-desc { font-size: 0.84em; color: var(--vscode-descriptionForeground); margin-bottom: 4px; line-height: 1.5; }
+  .finding-provenance { font-size: 0.76em; color: var(--vscode-descriptionForeground); opacity: 0.7; }
+  .badge-pass    { background: #38a169; color: #fff; }
+  .badge-warn    { background: #dd6b20; color: #fff; }
+  .badge-fail    { background: #e53e3e; color: #fff; }
+  .badge-unknown { background: #3182ce; color: #fff; }
+  .audit-section-header {
+    font-size: 0.78em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--vscode-descriptionForeground);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    padding-bottom: 4px; margin: var(--gap) 0 8px;
+  }
+  .audit-summary-row { display: flex; gap: var(--gap); margin-bottom: var(--gap); flex-wrap: wrap; }
+  .audit-stat { background: var(--vscode-editor-inactiveSelectionBackground); border: 1px solid var(--vscode-panel-border); border-radius: var(--radius-card); padding: 10px 18px; min-width: 80px; text-align: center; }
+  .audit-stat .val { font-size: 1.6em; font-weight: 800; }
+  .audit-stat .lbl { font-size: 0.75em; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
 </style>`;
 }
 
@@ -301,6 +390,7 @@ function nav(active: string): string {
   ${btn("overview", "Overview")}
   ${btn("impact", "Impact")}
   ${btn("graph", "Graph")}
+  ${btn("audit", "Governance")}
 </nav>`;
 }
 
@@ -336,6 +426,9 @@ function readyBody(state: Extract<PanelState, { state: "ready" }>): string {
 <div id="tab-graph" class="tab-section${vis("graph")}">
   ${graphSection(state.graph)}
 </div>
+<div id="tab-audit" class="tab-section${vis("audit")}">
+  ${auditSection(state.auditResult)}
+</div>
 `;
 }
 
@@ -351,13 +444,8 @@ function overviewSection(status: StatusResult, root: string): string {
 </div>`;
   }
 
-  const snapLine = `<span class="snap-id">${escHtml(status.snapshot_id)}</span>`;
-
   return `
 <div class="muted" style="margin-bottom:var(--gap)">${escHtml(root)}</div>
-
-<h2>Snapshot</h2>
-<div style="margin-bottom:var(--gap)">${snapLine}</div>
 
 <div class="stat-row">
   ${statCard(String(status.node_count), "Nodes")}
@@ -366,7 +454,7 @@ function overviewSection(status: StatusResult, root: string): string {
 
 <h2>Actions</h2>
 <div class="analyze-card">
-  <p>Re-scans every Python, TypeScript, and JavaScript file and rebuilds the dependency graph. The current snapshot will be replaced.</p>
+  <p>Re-scans every Python, TypeScript, and JavaScript file and rebuilds the dependency graph.</p>
   <button class="action" id="btn-analyze">Re-analyze repository</button>
 </div>
 `;
@@ -378,15 +466,36 @@ function impactSection(
   result?: { from: string; to: string; impact: ImpactSummary }
 ): string {
   const resultsHtml = result ? impactResultsHtml(result.from, result.to, result.impact) : "";
+  // Detect if last result used a non-stepper ref so we can pre-open advanced
+  const isAdvanced = result && !/^HEAD~\d+$/.test(result.from);
+  const advancedOpen = isAdvanced ? " open" : "";
 
   return `
 <h2>Impact analysis</h2>
 <div class="impact-form">
-  <label for="from-ref">From ref</label>
-  <input class="ref-input" id="from-ref" placeholder="HEAD~1" value="${result ? escHtml(result.from) : ""}" />
-  <label for="to-ref">To ref</label>
-  <input class="ref-input" id="to-ref" placeholder="HEAD" value="${result ? escHtml(result.to) : ""}" />
-  <button class="action" id="btn-impact">Run impact</button>
+  <div class="commit-stepper">
+    <label for="commit-count">Compare last</label>
+    <div class="stepper-control">
+      <button class="stepper-btn" id="stepper-minus" type="button" aria-label="Fewer commits">−</button>
+      <span class="stepper-val" id="stepper-val">1</span>
+      <button class="stepper-btn" id="stepper-plus" type="button" aria-label="More commits">+</button>
+    </div>
+    <label for="commit-count">commit${result ? "" : "s"}</label>
+  </div>
+  <div class="stepper-preview" id="stepper-preview">
+    Will compare <code id="preview-from">HEAD~1</code> → <code>HEAD</code>
+  </div>
+  <button class="action" id="btn-impact" style="margin-top:8px">Run impact</button>
+
+  <details class="impact-advanced"${advancedOpen}>
+    <summary>Advanced: specify git refs manually</summary>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label class="muted" for="from-ref">From</label>
+      <input class="ref-input" id="from-ref" placeholder="HEAD~1" value="${result && isAdvanced ? escHtml(result.from) : ""}" />
+      <label class="muted" for="to-ref">To</label>
+      <input class="ref-input" id="to-ref" placeholder="HEAD" value="${result && isAdvanced ? escHtml(result.to) : ""}" />
+    </div>
+  </details>
 </div>
 <div id="impact-results-container">${resultsHtml}</div>
 `;
@@ -450,6 +559,86 @@ function impactTable(impact: ImpactSummary): string {
 <thead><tr><th>Category</th><th>Symbol</th><th>File</th></tr></thead>
 <tbody>${rows.join("")}</tbody>
 </table>`;
+}
+
+// ── Audit tab ─────────────────────────────────────────────────────────────────
+
+const SECTION_ORDER = ["Security", "Delivery", "Repository Health", "Data Security", "AI Governance"];
+const CHECK_SECTION: Record<string, string> = {
+  DEPENDABOT: "Security",
+  STALE_PR: "Delivery",
+  CONFLICT: "Delivery",
+  DEPLOY_WITHOUT_TEST: "Delivery",
+  PII: "Data Security",
+  REPO_SPRAWL: "Repository Health",
+  PLAN_BEFORE_SHIP: "AI Governance",
+  INFLATED_DIFF: "AI Governance",
+  HITL: "AI Governance",
+};
+const STATUS_ICON: Record<string, string> = {
+  PASS: "✅", WARN: "⚠", FAIL: "✗", UNKNOWN: "?",
+};
+const STATUS_BADGE: Record<string, string> = {
+  PASS: "badge-pass", WARN: "badge-warn", FAIL: "badge-fail", UNKNOWN: "badge-unknown",
+};
+
+function findingCard(f: GovernanceFinding): string {
+  const badgeCls = STATUS_BADGE[f.status] ?? "badge-unknown";
+  const icon = STATUS_ICON[f.status] ?? "?";
+  return `<div class="finding-card">
+  <div class="finding-title">
+    <span class="badge ${badgeCls}">${escHtml(icon)} ${escHtml(f.status)}</span>
+    ${escHtml(f.title)}
+  </div>
+  <div class="finding-desc">${escHtml(f.description)}</div>
+  <div class="finding-provenance">provenance: ${escHtml(f.provenance)}</div>
+</div>`;
+}
+
+function auditSection(report?: GovernanceReport): string {
+  const formHtml = `
+<h2>Governance Audit</h2>
+<div class="audit-form">
+  <div>
+    <label for="audit-org">GitHub org or owner/repo</label>
+    <input type="text" id="audit-org" placeholder="e.g. tiangolo/fastapi" value="${report ? escHtml(report.org) : ""}" />
+  </div>
+  <div>
+    <label for="audit-token">GitHub token (optional)</label>
+    <input type="text" id="audit-token" placeholder="ghp_… or set GITHUB_TOKEN" />
+  </div>
+  <button class="action" id="btn-audit">Run audit</button>
+</div>`;
+
+  if (!report) {
+    return `${formHtml}<div class="empty-state">Enter a GitHub org or repo above and click <strong>Run audit</strong>.</div>`;
+  }
+
+  const fail = report.findings.filter(f => f.status === "FAIL").length;
+  const warn = report.findings.filter(f => f.status === "WARN").length;
+  const pass = report.findings.filter(f => f.status === "PASS").length;
+
+  const summaryHtml = `<div class="audit-summary-row">
+  <div class="audit-stat"><div class="val" style="color:#e53e3e">${fail}</div><div class="lbl">Failures</div></div>
+  <div class="audit-stat"><div class="val" style="color:#dd6b20">${warn}</div><div class="lbl">Warnings</div></div>
+  <div class="audit-stat"><div class="val" style="color:#38a169">${pass}</div><div class="lbl">Passing</div></div>
+  <div class="audit-stat"><div class="val">${report.repositories.length}</div><div class="lbl">Repos</div></div>
+</div>`;
+
+  const grouped: Record<string, GovernanceFinding[]> = {};
+  for (const f of report.findings) {
+    const sec = CHECK_SECTION[f.check] ?? "Other";
+    if (!grouped[sec]) grouped[sec] = [];
+    grouped[sec].push(f);
+  }
+
+  const sectionsHtml = SECTION_ORDER
+    .filter(s => grouped[s] && grouped[s].length > 0)
+    .map(s => `<div class="audit-section-header">${escHtml(s)}</div>
+${grouped[s].map(findingCard).join("")}`)
+    .join("");
+
+  return `${formHtml}${summaryHtml}${sectionsHtml || '<div class="empty-state">No findings.</div>'}`;
 }
 
 // ── Graph tab ─────────────────────────────────────────────────────────────────
@@ -807,7 +996,7 @@ function script(state: PanelState): string {
   const vscode = acquireVsCodeApi();
 
   // ── Tab switching (pure client-side, no host round-trip) ──────────────────
-  const tabs = ['overview', 'impact', 'graph'];
+  const tabs = ['overview', 'impact', 'graph', 'audit'];
 
   function showTab(name) {
     tabs.forEach(function(t) {
@@ -833,14 +1022,53 @@ function script(state: PanelState): string {
     });
   }
 
-  // ── Impact form ────────────────────────────────────────────────────────────
+  // ── Impact form stepper ────────────────────────────────────────────────────
+  var stepperVal = 1;
+  var stepperValEl  = document.getElementById('stepper-val');
+  var previewFromEl = document.getElementById('preview-from');
+  var minusBtn = document.getElementById('stepper-minus');
+  var plusBtn  = document.getElementById('stepper-plus');
+
+  function updateStepper() {
+    if (stepperValEl)  stepperValEl.textContent  = String(stepperVal);
+    if (previewFromEl) previewFromEl.textContent = 'HEAD~' + stepperVal;
+  }
+  if (minusBtn) minusBtn.addEventListener('click', function() {
+    if (stepperVal > 1) { stepperVal--; updateStepper(); }
+  });
+  if (plusBtn) plusBtn.addEventListener('click', function() {
+    if (stepperVal < 50) { stepperVal++; updateStepper(); }
+  });
+  updateStepper();
+
+  // ── Impact run ─────────────────────────────────────────────────────────────
   var btnImpact = document.getElementById('btn-impact');
   if (btnImpact) {
     btnImpact.addEventListener('click', function() {
-      var from = document.getElementById('from-ref').value.trim();
-      var to   = document.getElementById('to-ref').value.trim() || 'HEAD';
-      if (!from) { return; }
+      // If the advanced section is open and has values, use those; else use the stepper.
+      var advDetails = document.querySelector('details.impact-advanced');
+      var fromInput = document.getElementById('from-ref');
+      var toInput   = document.getElementById('to-ref');
+      var advancedFrom = fromInput ? fromInput.value.trim() : '';
+      var advancedTo   = toInput   ? toInput.value.trim()   : '';
+      var useAdvanced  = advDetails && advDetails.open && advancedFrom;
+
+      var from = useAdvanced ? advancedFrom : ('HEAD~' + stepperVal);
+      var to   = useAdvanced ? (advancedTo || 'HEAD') : 'HEAD';
       vscode.postMessage({ type: 'impact', from: from, to: to });
+    });
+  }
+
+  // ── Audit run ──────────────────────────────────────────────────────────────
+  var btnAudit = document.getElementById('btn-audit');
+  if (btnAudit) {
+    btnAudit.addEventListener('click', function() {
+      var orgInput   = document.getElementById('audit-org');
+      var tokenInput = document.getElementById('audit-token');
+      var org   = orgInput   ? orgInput.value.trim()   : '';
+      var token = tokenInput ? tokenInput.value.trim() : '';
+      if (!org) { orgInput && orgInput.focus(); return; }
+      vscode.postMessage({ type: 'audit', org: org, token: token });
     });
   }
 

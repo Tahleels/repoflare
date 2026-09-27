@@ -78,6 +78,25 @@ export interface GraphOverview {
   total_node_count: number;
 }
 
+export interface GovernanceFinding {
+  finding_id: string;
+  repository: string;
+  check: string;
+  status: "PASS" | "WARN" | "FAIL" | "UNKNOWN";
+  severity: string;
+  title: string;
+  description: string;
+  evidence: Array<{ key: string; value: unknown; note?: string }>;
+  provenance: string;
+}
+
+export interface GovernanceReport {
+  org: string;
+  repositories: string[];
+  findings: GovernanceFinding[];
+  generated_at: string;
+}
+
 // ── Error from the server ──────────────────────────────────────────────────────
 
 export class RpcError extends Error {
@@ -96,6 +115,7 @@ export const ERROR_NOT_ANALYZED = -32002;
 export const ERROR_GIT_FAILED = -32003;
 export const ERROR_AI_NOT_CONFIGURED = -32004;
 export const ERROR_AI_CALL_FAILED = -32005;
+export const ERROR_GITHUB_API = -32006;
 
 // ── Client ─────────────────────────────────────────────────────────────────────
 
@@ -176,11 +196,40 @@ export class RepoFlareRpcClient {
     return this._call("repoflare/graph", { path }) as Promise<GraphOverview>;
   }
 
+  audit(
+    org: string,
+    opts: {
+      token?: string;
+      staleDays?: number;
+      runAi?: boolean;
+      runPii?: boolean;
+      runSprawl?: boolean;
+    } = {}
+  ): Promise<GovernanceReport> {
+    return this._call("repoflare/audit", {
+      org,
+      token: opts.token,
+      stale_days: opts.staleDays ?? 14,
+      run_ai: opts.runAi ?? false,
+      run_pii: opts.runPii ?? true,
+      run_sprawl: opts.runSprawl ?? true,
+    }) as Promise<GovernanceReport>;
+  }
+
   dispose(): void {
+    if (this._closed) {
+      return; // already shut down (subprocess exited or prior dispose) — stdin is gone
+    }
     this._closed = true;
     // Close stdin — the server loop exits on EOF, so this is the clean shutdown path
     // documented in rpc/server.py's serve_forever docstring.
     this._proc.stdin.end();
+  }
+
+  /** True once the subprocess has exited or been disposed — such a client can never
+   * serve another request, so callers must replace it rather than reuse it. */
+  get closed(): boolean {
+    return this._closed;
   }
 
   // ── Internals ───────────────────────────────────────────────────────────────

@@ -1,10 +1,12 @@
 import io
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from repoflare_core.domain.entities import GovernanceReport
 from repoflare_core.rpc.protocol import read_message, write_message
 from repoflare_core.rpc.server import RpcServer
 
@@ -78,7 +80,12 @@ def test_init_and_analyze_agree_on_repository_id_despite_path_casing(tmp_path: P
     assert analyze_response["result"]["symbol_count"] == 1
 
 
-def test_impact_and_explain_over_rpc(tmp_path: Path) -> None:
+def test_impact_and_explain_over_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The explain assertion below requires NO AI provider to be configured; scrub the
+    # ambient environment so the test stays deterministic (and never makes a live API
+    # call) on machines that have GEMINI_API_KEY/OPENROUTER_API_KEY set.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     repo = tmp_path
     (repo / "a.py").write_text("def helper():\n    pass\n")
     (repo / "b.py").write_text("from a import helper\n\ndef entry():\n    helper()\n")
@@ -201,3 +208,50 @@ def test_graph_overview_over_rpc(tmp_path: Path) -> None:
     assert isinstance(result["truncated"], bool)
     assert result["truncated"] is False
     assert len(result["nodes"]) >= 1
+
+
+def test_audit_response_is_json_serializable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: GovernanceReport.generated_at is a datetime, which _to_jsonable used to
+    pass through unchanged — json.dumps in write_message then raised TypeError outside the
+    handler's try/except, killing the whole repoflare_core subprocess (the extension showed
+    "⚠ repoflare_core process exited with code 1" the moment an audit finished)."""
+    report = GovernanceReport(
+        org="acme",
+        repositories=["acme/widgets"],
+        findings=[],
+        generated_at=datetime(2026, 9, 27, 12, 0, tzinfo=UTC),
+    )
+    monkeypatch.setattr("repoflare_core.rpc.server.run_audit", lambda *a, **k: report)
+
+    server = RpcServer()
+    response = server.handle_request(
+        {"jsonrpc": "2.0", "id": 1, "method": "repoflare/audit", "params": {"org": "acme"}}
+    )
+
+    assert response is not None
+    assert "error" not in response
+    stream = io.BytesIO()
+    write_message(stream, response)  # must not raise TypeError
+    stream.seek(0)
+    decoded = read_message(stream)
+    assert decoded is not None
+    assert decoded["result"]["generated_at"] == "2026-09-27T12:00:00+00:00"
+
+
+def test_unserializable_result_becomes_internal_error_not_a_dead_process() -> None:
+    """Any handler result json.dumps can't encode must surface as a -32603 error response
+    from handle_request — never escape into serve_forever, where it would take down the
+    entire stdio server (and every pending extension request with it)."""
+
+    def bad_handler(params: dict) -> object:  # type: ignore[type-arg]
+        return {"when": object()}
+
+    server = RpcServer(handlers={"repoflare/bad": bad_handler})
+    response = server.handle_request({"jsonrpc": "2.0", "id": 1, "method": "repoflare/bad"})
+
+    assert response is not None
+    assert response["error"]["code"] == -32603
+    stream = io.BytesIO()
+    write_message(stream, response)
+    stream.seek(0)
+    assert read_message(stream) is not None

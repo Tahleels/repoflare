@@ -116,3 +116,28 @@ test("RepoFlareRpcClient surfaces NOT_ANALYZED before analyze has run", async (t
     client.dispose();
   }
 });
+
+test("closed getter flips after the subprocess dies, enabling client replacement", async () => {
+  // extension.ts checks `client.closed` to decide whether a cached client can be reused —
+  // a dead subprocess must be detectable so a fresh one can be spawned instead of
+  // rejecting every later command with "RPC client is closed".
+  const client = new RepoFlareRpcClient("definitely-not-a-real-python-xyz", process.cwd(), () => {
+    /* spawn errors are the expected path here */
+  });
+
+  assert.equal(client.closed, false);
+  await new Promise<void>((resolve) => {
+    // The spawn 'error' event flips _closed for an unlaunchable binary; poll with a
+    // timeout so the test fails rather than hangs if that ever stops holding.
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (client.closed || Date.now() - started > 5000) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 25);
+  });
+  assert.equal(client.closed, true);
+  client.dispose(); // must be a no-op on an already-dead client
+  assert.equal(client.closed, true);
+});

@@ -151,3 +151,57 @@ class AIContextPackage:
     """Each inner list is a chain of node_ids representing one dependency path."""
     direct_dependents: list[str]
     relevant_tests: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Governance domain
+# ---------------------------------------------------------------------------
+
+
+class GovernanceStatus(StrEnum):
+    PASS = "PASS"
+    WARN = "WARN"
+    FAIL = "FAIL"
+    UNKNOWN = "UNKNOWN"
+
+
+class GovernanceCheck(StrEnum):
+    DEPENDABOT = "DEPENDABOT"
+    STALE_PR = "STALE_PR"
+    CONFLICT = "CONFLICT"
+    DEPLOY_WITHOUT_TEST = "DEPLOY_WITHOUT_TEST"
+    PII = "PII"
+    REPO_SPRAWL = "REPO_SPRAWL"
+    PLAN_BEFORE_SHIP = "PLAN_BEFORE_SHIP"
+    INFLATED_DIFF = "INFLATED_DIFF"
+    HITL = "HITL"
+
+
+@dataclass(frozen=True, slots=True)
+class GovernanceFinding:
+    """A single governance finding.  `provenance` distinguishes how it was derived:
+    'deterministic', 'github_api', 'graph_analysis', or 'bob_reasoning' — mirroring
+    ImpactResult.provenance's philosophy of being explicit about evidence sources."""
+
+    finding_id: str
+    repository: str
+    check: GovernanceCheck
+    status: GovernanceStatus
+    severity: str
+    """'critical', 'high', 'medium', 'low', or 'info'."""
+    title: str
+    description: str
+    evidence: list[dict[str, Any]]
+    provenance: str
+    """How this result was derived: 'deterministic', 'github_api', 'graph_analysis',
+    or 'bob_reasoning'."""
+
+
+@dataclass(frozen=True, slots=True)
+class GovernanceReport:
+    """Aggregate result of a full governance audit over an org or single repository."""
+
+    org: str
+    repositories: list[str]
+    findings: list[GovernanceFinding]
+    generated_at: datetime

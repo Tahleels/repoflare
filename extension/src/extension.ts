@@ -27,6 +27,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("repoflare.showGraph", () =>
       withClient(context, (client, root) => RepoFlarePanel.showGraph(context, client, root))
+    ),
+    vscode.commands.registerCommand("repoflare.showAudit", () =>
+      withClient(context, (client, root) => RepoFlarePanel.showAudit(context, client, root))
     )
   );
 }
@@ -52,9 +55,13 @@ function workspaceRoot(): string | undefined {
 
 function getOrCreateClient(root: string): RepoFlareRpcClient {
   const existing = clients.get(root);
-  if (existing) {
+  // A client whose subprocess died (crash, pythonPath change, window-lifetime zombie)
+  // rejects every call forever — replace it instead of surfacing "RPC client is closed"
+  // (or the original "process exited with code 1") on every later command.
+  if (existing && !existing.closed) {
     return existing;
   }
+  existing?.dispose();
   const client = new RepoFlareRpcClient(pythonPath(), root, (err) => {
     outputChannel.appendLine(`[error] ${err.message}`);
   });

@@ -1,5 +1,5 @@
 """Application service layer: the actual orchestration behind init/analyze/status/impact/
-explain — shared verbatim between the CLI and the RPC server (see docs/ARCHITECTURE.md
+explain/audit — shared verbatim between the CLI and the RPC server (see docs/ARCHITECTURE.md
 ADR-001 and the project brief's "no duplicated business logic across CLI and extension"
 principle). Neither interface layer holds orchestration logic of its own; they only
 format/print (CLI) or JSON-encode (RPC) what this module returns, and translate the
@@ -19,7 +19,13 @@ from repoflare_core.cache.provider import CacheProvider
 from repoflare_core.change.detector import ChangeDetector
 from repoflare_core.change.git_adapter import GitAdapter, GitCommandError
 from repoflare_core.config import graph_db_path
-from repoflare_core.domain.entities import ImpactResult, NodeKind, Repository, Snapshot
+from repoflare_core.domain.entities import (
+    GovernanceReport,
+    ImpactResult,
+    NodeKind,
+    Repository,
+    Snapshot,
+)
 from repoflare_core.domain.ids import stable_id
 from repoflare_core.graph.store import GraphStore
 from repoflare_core.graph.traversal import GraphTraversalService
@@ -296,6 +302,63 @@ def run_graph_overview(root: Path, max_nodes: int = 150) -> GraphOverview:
         truncated=total_node_count > max_nodes,
         total_node_count=total_node_count,
     )
+
+
+# ---------------------------------------------------------------------------
+# Governance audit
+# ---------------------------------------------------------------------------
+
+
+def run_audit(
+    org: str,
+    *,
+    token: str | None = None,
+    stale_days: int = 14,
+    run_ai: bool = False,
+    ai_pr_sample: int = 5,
+    run_pii: bool = True,
+    run_sprawl: bool = True,
+) -> GovernanceReport:
+    """Run the full governance audit for a GitHub org (or a single owner/repo slug).
+
+    Args:
+        org:          GitHub organisation name (or ``"owner/repo"`` for a single repo).
+        token:        GitHub personal access token.  Falls back to GITHUB_TOKEN env var.
+        stale_days:   Threshold for stale-PR detection.
+        run_ai:       Whether to run the Tier-2 Bob-powered checks.
+        ai_pr_sample: Max PRs to run AI checks on per repository.
+        run_pii:      Whether to run the PII/secret pattern scan.
+        run_sprawl:   Whether to run repo-sprawl detection.
+
+    Returns:
+        A ``GovernanceReport`` ready for rendering or serialisation.
+
+    Raises:
+        ``governance.github.GitHubAPIError`` if the GitHub API call fails.
+        ``ai.factory.BobProviderConfigError`` if AI checks are enabled but no provider
+        is configured.
+    """
+    from repoflare_core.governance.engine import GovernanceEngine, GovernanceEngineConfig
+    from repoflare_core.governance.github import GitHubAdapter
+
+    config = GovernanceEngineConfig(
+        stale_days=stale_days,
+        run_pii=run_pii,
+        run_sprawl=run_sprawl,
+        run_ai_checks=run_ai,
+        ai_pr_sample=ai_pr_sample,
+    )
+
+    bob = None
+    if run_ai:
+        bob = default_bob_provider()
+
+    with GitHubAdapter(token=token) as adapter:
+        engine = GovernanceEngine(adapter, config=config, bob_provider=bob)
+        if "/" in org:
+            owner, repo = org.split("/", 1)
+            return engine.run_repo(owner, repo)
+        return engine.run_org(org)
 
 
 def run_explain(root: Path, from_ref: str, to_ref: str = "HEAD") -> str | None:

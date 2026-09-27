@@ -12,13 +12,14 @@
  */
 
 import * as vscode from "vscode";
-import { RepoFlareRpcClient, ImpactSummary, RpcError, StatusResult, GraphOverview } from "./rpc";
+import { RepoFlareRpcClient, ImpactSummary, RpcError, StatusResult, GraphOverview, GovernanceReport } from "./rpc";
 import { buildWebviewHtml, PanelState } from "./webview";
 
 // Messages the webview sends to the extension host.
 type WebviewMessage =
   | { type: "analyze" }
   | { type: "impact"; from: string; to: string }
+  | { type: "audit"; org: string; token: string }
   | { type: "ready" };
 
 export class RepoFlarePanel {
@@ -30,6 +31,7 @@ export class RepoFlarePanel {
   // Cached data so tab switches don't re-fetch
   private _status: StatusResult | null = null;
   private _graph: GraphOverview | null = null;
+  private _auditResult: GovernanceReport | null = null;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -78,6 +80,31 @@ export class RepoFlarePanel {
     await RepoFlarePanel._current._load("overview");
   }
 
+  /** Open the panel directly on the Governance Audit tab. */
+  static async showAudit(
+    context: vscode.ExtensionContext,
+    client: RepoFlareRpcClient,
+    root: string
+  ): Promise<void> {
+    const column = vscode.window.activeTextEditor
+      ? vscode.window.activeTextEditor.viewColumn
+      : vscode.ViewColumn.One;
+
+    if (RepoFlarePanel._current) {
+      RepoFlarePanel._current._panel.reveal(column);
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      "repoflare",
+      "RepoFlare",
+      column ?? vscode.ViewColumn.One,
+      { enableScripts: true, localResourceRoots: [], retainContextWhenHidden: true }
+    );
+    RepoFlarePanel._current = new RepoFlarePanel(panel, context, client, root);
+    await RepoFlarePanel._current._load("audit");
+  }
+
   /** Open the panel directly on the graph tab. */
   static async showGraph(
     context: vscode.ExtensionContext,
@@ -111,7 +138,7 @@ export class RepoFlarePanel {
    * Subsequent tab switches happen client-side without calling this again.
    */
   private async _load(
-    activeTab: "overview" | "impact" | "graph",
+    activeTab: "overview" | "impact" | "graph" | "audit",
     impactResult?: { from: string; to: string; impact: ImpactSummary }
   ): Promise<void> {
     this._panel.webview.html = buildWebviewHtml({ state: "loading" });
@@ -133,6 +160,7 @@ export class RepoFlarePanel {
         graph: this._graph,
         activeTab,
         impactResult,
+        auditResult: this._auditResult ?? undefined,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -177,6 +205,7 @@ export class RepoFlarePanel {
             graph: this._graph,
             activeTab: "impact",
             impactResult: { from: msg.from, to: msg.to, impact },
+            auditResult: this._auditResult ?? undefined,
           });
         } catch (err) {
           if (err instanceof RpcError) {
@@ -188,6 +217,37 @@ export class RepoFlarePanel {
             const message = err instanceof Error ? err.message : String(err);
             this._panel.webview.html = buildWebviewHtml({ state: "error", message });
           }
+        }
+        break;
+
+      case "audit":
+        this._panel.webview.html = buildWebviewHtml({ state: "loading" });
+        try {
+          const status = this._status ?? await this._client.status(this._root);
+          this._status = status;
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: `RepoFlare: running governance audit for ${msg.org}…`,
+              cancellable: false,
+            },
+            async () => {
+              this._auditResult = await this._client.audit(msg.org, {
+                token: msg.token || undefined,
+              });
+            }
+          );
+          this._panel.webview.html = buildWebviewHtml({
+            state: "ready",
+            status,
+            root: this._root,
+            graph: this._graph,
+            activeTab: "audit",
+            auditResult: this._auditResult ?? undefined,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          this._panel.webview.html = buildWebviewHtml({ state: "error", message });
         }
         break;
     }

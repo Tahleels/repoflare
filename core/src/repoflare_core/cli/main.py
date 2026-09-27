@@ -3,10 +3,11 @@ lives here; every command formats/prints what the service layer returns and tran
 exceptions into exit codes. The RPC server (rpc/) is the other interface over the same
 service layer — see service.py's module docstring.
 
-Implemented so far: init, analyze, status, impact, explain — the full scan -> graph ->
-impact -> targeted AI reasoning vertical slice. `verify` is intentionally not stubbed here;
-it depends on VerificationService, which doesn't exist yet (see AGENTS.md "Next up"). A
-command that always errors "not implemented" is worse than no command at all.
+Implemented so far: init, analyze, status, impact, explain, audit — the full scan -> graph
+-> impact -> targeted AI reasoning vertical slice, plus the governance audit subsystem.
+`verify` is intentionally not stubbed here; it depends on VerificationService, which doesn't
+exist yet (see AGENTS.md "Next up"). A command that always errors "not implemented" is worse
+than no command at all.
 """
 
 from __future__ import annotations
@@ -21,11 +22,14 @@ from rich.table import Table
 from repoflare_core.ai.factory import BobProviderConfigError
 from repoflare_core.ai.provider import BobProviderError
 from repoflare_core.change.git_adapter import GitCommandError
-from repoflare_core.export.html import render_html
+from repoflare_core.domain.entities import GovernanceFinding, GovernanceStatus
+from repoflare_core.export.html import render_governance_html, render_html
+from repoflare_core.governance.github import GitHubAPIError
 from repoflare_core.service import (
     NotAnalyzedError,
     NotInitializedError,
     run_analyze,
+    run_audit,
     run_explain,
     run_impact,
     run_init,
@@ -52,6 +56,9 @@ _EXPORT_FROM_OPT = typer.Option(
 )
 _EXPORT_OUTPUT_OPT = typer.Option(
     None, "--output", "-o", help="Output file. Defaults to <repo>/.repoflare/report.html."
+)
+_AUDIT_OUTPUT_OPT = typer.Option(
+    None, "--output", "-o", help="Output path for --html audit report."
 )
 
 # Console shared by all commands — highlight=False keeps output deterministic in tests
@@ -234,6 +241,117 @@ def export_html(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
     typer.echo(f"Wrote report to {output_path}")
+
+
+@app.command()
+def audit(
+    org: str = typer.Argument(
+        ..., help="GitHub organisation name (or owner/repo for a single repo)."
+    ),
+    token: str | None = typer.Option(
+        None, "--token", envvar="GITHUB_TOKEN", help="GitHub personal access token."
+    ),
+    stale_days: int = typer.Option(
+        14, "--stale-days", help="Days threshold for stale PR detection."
+    ),
+    ai: bool = typer.Option(
+        False, "--ai", is_flag=True, help="Enable Tier-2 Bob-powered AI checks."
+    ),
+    ai_pr_sample: int = typer.Option(
+        5, "--ai-pr-sample", help="Max PRs to run AI checks on per repo."
+    ),
+    no_pii: bool = typer.Option(
+        False, "--no-pii", is_flag=True, help="Skip PII/secret pattern scan."
+    ),
+    no_sprawl: bool = typer.Option(
+        False, "--no-sprawl", is_flag=True, help="Skip repo-sprawl detection."
+    ),
+    html: bool = typer.Option(
+        False, "--html", is_flag=True, help="Write an HTML report instead of console output."
+    ),
+    output: Path | None = _AUDIT_OUTPUT_OPT,
+) -> None:
+    """Run the RepoFlare Governance Audit for a GitHub org or repository.
+
+    Examples::
+
+      repoflare audit Tahleels
+      repoflare audit Tahleels --html
+      repoflare audit Tahleels --stale-days 7 --ai
+      repoflare audit myorg/myrepo --token ghp_...
+    """
+    try:
+        report = run_audit(
+            org,
+            token=token,
+            stale_days=stale_days,
+            run_ai=ai,
+            ai_pr_sample=ai_pr_sample,
+            run_pii=not no_pii,
+            run_sprawl=not no_sprawl,
+        )
+    except GitHubAPIError as exc:
+        typer.echo(f"error: GitHub API error — {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except BobProviderConfigError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if html:
+        out_path = output or Path(f"repoflare-audit-{org.replace('/', '-')}.html")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(render_governance_html(report), encoding="utf-8")
+        typer.echo(f"Wrote governance report to {out_path}")
+        return
+
+    # Console output
+    _console.print("\n[bold]RepoFlare Governance Audit[/bold]")
+    _console.print("─" * 46)
+    _console.print(f"Organisation: [bold]{org}[/bold]")
+    _console.print(f"Repositories: {len(report.repositories)}")
+    _console.print(f"Findings:     {len(report.findings)}\n")
+
+    # Group findings by section for display
+    _SECTION_MAP = {
+        "DEPENDABOT": "Security",
+        "STALE_PR": "Delivery",
+        "CONFLICT": "Delivery",
+        "DEPLOY_WITHOUT_TEST": "Delivery",
+        "PII": "Data Security",
+        "REPO_SPRAWL": "Repository Health",
+        "PLAN_BEFORE_SHIP": "AI Governance",
+        "INFLATED_DIFF": "AI Governance",
+        "HITL": "AI Governance",
+    }
+    _SECTION_ORDER = ["Security", "Delivery", "Repository Health", "Data Security", "AI Governance"]
+    _STATUS_COLOR = {
+        GovernanceStatus.FAIL: "bold red",
+        GovernanceStatus.WARN: "bold yellow",
+        GovernanceStatus.PASS: "bold green",
+        GovernanceStatus.UNKNOWN: "bold blue",
+    }
+    _STATUS_ICON = {
+        GovernanceStatus.FAIL: "🔴",
+        GovernanceStatus.WARN: "🟡",
+        GovernanceStatus.PASS: "✅",
+        GovernanceStatus.UNKNOWN: "❔",
+    }
+
+    sections: dict[str, list[GovernanceFinding]] = {s: [] for s in _SECTION_ORDER}
+    for finding in report.findings:
+        section = _SECTION_MAP.get(finding.check.value, "Other")
+        sections.setdefault(section, []).append(finding)
+
+    for section_name in _SECTION_ORDER:
+        section_findings = sections.get(section_name, [])
+        if not section_findings:
+            continue
+        _console.print(f"[bold]{section_name}[/bold]")
+        for f in section_findings:
+            icon = _STATUS_ICON.get(f.status, "❔")
+            color = _STATUS_COLOR.get(f.status, "bold")
+            _console.print(f"  {icon} [{color}]{f.status.value}[/{color}]  {f.title}")
+        _console.print()
 
 
 if __name__ == "__main__":
