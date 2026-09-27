@@ -75,3 +75,4 @@ id_dsa
 
 # Local-only archive (non-essential reference files)
 _archive/
+timepass/          # Local reference (build prompts, planning docs)
