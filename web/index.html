@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RepoFlare — Repository Intelligence</title>
+<meta name="description" content="RepoFlare builds a live knowledge graph of your codebase and tells you exactly what a change affects — deterministic graph traversal first, AI reasoning only where it earns its keep.">
+<style>
+  :root {
+    --rf-orange: #f97316;
+    --rf-orange-glow: rgba(249,115,22,0.35);
+    --rf-blue: #60a5fa;
+    --rf-purple: #a78bfa;
+    --rf-green: #34d399;
+    --rf-yellow: #fbbf24;
+    --rf-red: #f87171;
+    --card-bg: rgba(255,255,255,0.04);
+    --card-border: rgba(255,255,255,0.09);
+    --card-hover: rgba(255,255,255,0.07);
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f172a;
+    background-image: radial-gradient(1200px 500px at 15% -10%, rgba(249,115,22,0.10), transparent 60%),
+                       radial-gradient(1000px 600px at 100% 0%, rgba(96,165,250,0.10), transparent 60%);
+    color: #e2e8f0;
+    line-height: 1.55;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  header.nav {
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(15,23,42,0.85); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--card-border);
+  }
+  .nav-inner { max-width: 1100px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; letter-spacing: 0.2px; }
+  .brand .flame { color: var(--rf-orange); filter: drop-shadow(0 0 8px var(--rf-orange-glow)); }
+  .nav-links { display: flex; gap: 22px; font-size: 14px; color: #94a3b8; }
+  .nav-links a:hover { color: #e2e8f0; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 14px;
+    text-decoration: none; border: 1px solid var(--card-border); transition: all .15s ease;
+  }
+  .btn-primary { background: linear-gradient(135deg, var(--rf-orange), #ea580c); color: #0f172a; border: none; box-shadow: 0 8px 24px rgba(249,115,22,0.25); }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 12px 30px rgba(249,115,22,0.35); }
+  .btn-ghost { background: var(--card-bg); color: #e2e8f0; }
+  .btn-ghost:hover { background: var(--card-hover); }
+
+  .hero { padding: 84px 0 56px; text-align: center; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600;
+    color: #fbbf24; background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.25);
+    padding: 6px 14px; border-radius: 20px; margin-bottom: 22px;
+  }
+  h1 { font-size: 52px; font-weight: 800; margin: 0 0 18px; letter-spacing: -1px; line-height: 1.08; }
+  h1 span { background: linear-gradient(90deg, var(--rf-orange), var(--rf-yellow) 45%, var(--rf-blue)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p.sub { font-size: 19px; color: #94a3b8; max-width: 680px; margin: 0 auto 34px; }
+  .hero-ctas { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+
+  section { padding: 64px 0; }
+  section.alt { background: rgba(255,255,255,0.015); border-top: 1px solid var(--card-border); border-bottom: 1px solid var(--card-border); }
+  .section-head { text-align: center; max-width: 680px; margin: 0 auto 40px; }
+  .section-head .eyebrow { color: var(--rf-blue); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px; }
+  .section-head h2 { font-size: 32px; margin: 0 0 10px; font-weight: 800; }
+  .section-head p { color: #94a3b8; font-size: 16px; margin: 0; }
+
+  .video-frame {
+    border-radius: 16px; overflow: hidden; border: 1px solid var(--card-border);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5); background: #000;
+  }
+  video { width: 100%; display: block; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  @media (max-width: 820px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } h1 { font-size: 38px; } .hero { padding: 60px 0 40px; } }
+
+  .card {
+    background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius);
+    padding: 26px; transition: background .15s ease, transform .15s ease;
+  }
+  .card:hover { background: var(--card-hover); transform: translateY(-2px); }
+  .card h3 { margin: 0 0 6px; font-size: 19px; display: flex; align-items: center; gap: 10px; }
+  .card p { color: #94a3b8; font-size: 14.5px; margin: 0 0 14px; }
+  .card ul { margin: 0; padding-left: 18px; color: #cbd5e1; font-size: 14.5px; }
+  .card ul li { margin-bottom: 6px; }
+  .card img { width: 100%; border-radius: 8px; border: 1px solid var(--card-border); margin-top: 14px; }
+  .pill { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; text-transform: uppercase; letter-spacing: .5px; }
+  .pill-cli { background: rgba(52,211,153,0.15); color: var(--rf-green); }
+  .pill-ext { background: rgba(96,165,250,0.15); color: var(--rf-blue); }
+
+  .pipeline { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; margin: 44px 0 10px; }
+  .pstep { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 12px 18px; font-size: 13.5px; font-weight: 600; color: #e2e8f0; }
+  .parrow { color: #475569; font-size: 18px; }
+
+  .stack { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 28px; }
+  .chip { font-size: 12.5px; color: #94a3b8; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); padding: 6px 12px; border-radius: 20px; }
+
+  pre.code {
+    background: #0b0f19; border: 1px solid var(--card-border); border-radius: 10px;
+    padding: 20px 22px; font-family: "Cascadia Code", Consolas, monospace; font-size: 14px;
+    color: #d1d5db; overflow-x: auto; line-height: 1.7;
+  }
+  pre.code .c { color: #64748b; }
+  pre.code .g { color: var(--rf-green); }
+
+  footer { padding: 40px 0 60px; text-align: center; color: #64748b; font-size: 13.5px; border-top: 1px solid var(--card-border); }
+  footer a { color: #94a3b8; text-decoration: none; }
+  footer a:hover { color: #e2e8f0; }
+  footer .flinks { display: flex; gap: 20px; justify-content: center; margin-bottom: 14px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <div class="brand"><span class="flame">🔥</span> RepoFlare</div>
+    <nav class="nav-links">
+      <a href="#demo">Demo</a>
+      <a href="#how">How it works</a>
+      <a href="#try">Try it</a>
+      <a href="report.html">Sample report</a>
+    </nav>
+    <a class="btn btn-ghost" href="https://github.com/Tahleels/repoflare" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</header>
+
+<section class="hero wrap">
+  <div class="badge">⚡ Built with IBM Bob 2.0 — Hackathon Submission</div>
+  <h1>Know exactly what<br><span>your next change breaks.</span></h1>
+  <p class="sub">RepoFlare builds a live knowledge graph of your codebase — files, symbols, calls, imports, tests —
+    then answers "what does this affect?" with deterministic graph traversal first, and AI reasoning only where
+    traversal alone can't explain the "why."</p>
+  <div class="hero-ctas">
+    <a class="btn btn-primary" href="#demo">▶ Watch the demo</a>
+    <a class="btn btn-ghost" href="report.html">View a sample report ↗</a>
+  </div>
+</section>
+
+<section id="demo" class="wrap">
+  <div class="section-head">
+    <div class="eyebrow">See it in action</div>
+    <h2>CLI + VS Code extension, end to end</h2>
+    <p>Init → analyze → impact → explain → export — run entirely from the terminal, or the same graph
+      surfaced live inside VS Code.</p>
+  </div>
+  <div class="video-frame">
+    <video controls preload="metadata" poster="assets/shot-impact.png">
+      <source src="cli-demo.mp4" type="video/mp4">
+    </video>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Two ways to use it</div>
+      <h2>Same graph, same engine, two front doors</h2>
+      <p>The CLI and the VS Code extension are thin interfaces over one shared Python core — nothing is
+        duplicated, nothing drifts between them.</p>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h3><span class="pill pill-cli">CLI</span> repoflare</h3>
+        <p>A five-command workflow: init, analyze, status, impact, explain, export-html. Rich terminal
+          output, real AI reasoning, zero cloud dependency by default.</p>
+        <ul>
+          <li><code>repoflare init</code> — set up a local graph database</li>
+          <li><code>repoflare analyze</code> — scan, parse, build the graph</li>
+          <li><code>repoflare impact --from &lt;ref&gt;</code> — deterministic blast-radius</li>
+          <li><code>repoflare explain --from &lt;ref&gt;</code> — AI plain-language explanation</li>
+          <li><code>repoflare export-html</code> — shareable static report</li>
+        </ul>
+        <img src="assets/shot-impact.png" alt="repoflare impact command showing DIRECT and INDIRECT affected symbols">
+      </div>
+      <div class="card">
+        <h3><span class="pill pill-ext">Extension</span> VS Code</h3>
+        <p>The same graph, live in your editor. Analyze, impact, and an interactive dependency graph view
+          without leaving your file.</p>
+        <ul>
+          <li>Overview panel — project graph state at a glance</li>
+          <li>One-click Analyze from the command palette</li>
+          <li>Impact view — see what a change affects inline</li>
+          <li>Interactive Graph view — click any node for detail</li>
+          <li>JSON-RPC over stdio — same core, same results as the CLI</li>
+        </ul>
+        <img src="assets/shot-explain.png" alt="repoflare explain command showing a real Gemini-generated explanation">
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="wrap">
+  <div class="section-head">
+    <div class="eyebrow">How it works</div>
+    <h2>Graph traversal first. AI only where it earns its keep.</h2>
+    <p>Impact analysis is deterministic — a recursive graph traversal over real parsed symbols, not a
+      model guessing at file names.</p>
+  </div>
+  <div class="pipeline">
+    <div class="pstep">Scan</div><div class="parrow">→</div>
+    <div class="pstep">Parse (tree-sitter)</div><div class="parrow">→</div>
+    <div class="pstep">Graph (DuckDB)</div><div class="parrow">→</div>
+    <div class="pstep">Impact (traversal)</div><div class="parrow">→</div>
+    <div class="pstep">Explain (AI)</div>
+  </div>
+  <div class="stack">
+    <span class="chip">DuckDB — embedded graph store</span>
+    <span class="chip">tree-sitter — real AST parsing</span>
+    <span class="chip">Python 3.12 core</span>
+    <span class="chip">Gemini — free-tier AI reasoning</span>
+    <span class="chip">TypeScript — VS Code extension</span>
+    <span class="chip">JSON-RPC over stdio</span>
+  </div>
+</section>
+
+<section id="try" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <div class="eyebrow">Run it yourself</div>
+      <h2>Live in under a minute</h2>
+      <p>Works fully offline for scan/analyze/impact. AI-powered <code>explain</code> needs a free
+        Gemini or OpenRouter key.</p>
+    </div>
+    <pre class="code"><span class="c"># clone and install</span>
+git clone https://github.com/Tahleels/repoflare.git
+cd repoflare/core &amp;&amp; uv sync
+
+<span class="c"># point it at any repo and see what a change affects</span>
+uv run repoflare init
+uv run repoflare analyze
+uv run repoflare impact --from HEAD~1  <span class="g"># deterministic blast-radius</span>
+uv run repoflare explain --from HEAD~1 <span class="g"># AI plain-language explanation</span></pre>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="flinks">
+      <a href="https://github.com/Tahleels/repoflare" target="_blank" rel="noopener">GitHub Repository</a>
+      <a href="report.html">Sample HTML Report</a>
+      <a href="#demo">Demo Video</a>
+    </div>
+    RepoFlare — repository-intelligence CLI &amp; VS Code extension. Built for the IBM Bob 2.0 hackathon.
+  </div>
+</footer>
+
+</body>
+</html>

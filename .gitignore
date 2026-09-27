@@ -23,6 +23,9 @@ out/
 dist/
 *.vsix
 
+# Scratch/throwaway working files (demo repos, generated assets, one-off scripts)
+core/scratch/
+
 # Editor / OS
 .DS_Store
 Thumbs.db
