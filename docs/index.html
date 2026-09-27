@@ -6,56 +6,246 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
 <title>RepoFlare report</title>
 <style>
-  :root { --gap: 16px; }
-  body { font-family: -apple-system, "Segoe UI", sans-serif; font-size: 14px; color: #1e1e1e;
-         background: #ffffff; margin: 0; padding: 24px; line-height: 1.5; max-width: 900px; }
-  h1 { font-size: 1.3em; font-weight: 600; margin: 0 0 4px; }
-  h2 { font-size: 1.05em; font-weight: 600; margin: var(--gap) 0 8px;
-       border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-  .muted { color: #6a6a6a; font-size: 0.9em; }
-  .badge { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 0.8em;
-           font-weight: 600; color: #fff; }
-  .badge-direct { background: #c53030; }
-  .badge-indirect { background: #b7791f; }
-  .badge-related { background: #2b6cb0; }
-  .badge-possible { background: #276749; }
-  .stat-row { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
-  .stat-card { background: #f5f5f5; border: 1px solid #ddd; border-radius: 6px;
-               padding: 10px 16px; min-width: 100px; }
-  .stat-card .value { font-size: 1.6em; font-weight: 700; }
-  .stat-card .label { font-size: 0.8em; color: #6a6a6a; }
-  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
-  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #eee; font-size: 0.9em; }
-  th { color: #6a6a6a; font-weight: 600; }
-  .filepath { font-family: monospace; color: #2b6cb0; }
-  .snap-id { font-family: monospace; font-size: 0.85em; }
-  .changed-list { padding-left: 18px; margin: 4px 0 12px; }
-  .changed-list li { font-family: monospace; font-size: 0.88em; }
-  .empty-state { color: #6a6a6a; padding: 12px 0; font-style: italic; }
-  .generated { color: #999; font-size: 0.8em; margin-top: 32px; }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+  :root {
+    --gap: 18px;
+    --gap-sm: 10px;
+    --radius-card: 12px;
+    --radius-btn: 8px;
+    --radius-pill: 20px;
+    --rf-orange: #f97316;
+    --rf-orange-dim: rgba(249,115,22,0.18);
+    --rf-orange-glow: rgba(249,115,22,0.35);
+    --rf-blue: #60a5fa;
+    --rf-purple: #a78bfa;
+    --rf-green: #34d399;
+    --rf-yellow: #fbbf24;
+    --rf-red: #f87171;
+    --rf-card-bg: rgba(255,255,255,0.04);
+    --rf-card-border: rgba(255,255,255,0.09);
+    --rf-card-hover: rgba(255,255,255,0.07);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    color: #e2e8f0;
+    background: #0f172a;
+    margin: 0;
+    padding: 0;
+    line-height: 1.6;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+
+  h1 { font-size: 1.2em; font-weight: 800; margin: 0; letter-spacing: -0.02em; color: #fff; }
+  h2 {
+    font-size: 0.75em;
+    font-weight: 700;
+    margin: var(--gap) 0 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  h2::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rf-card-border);
+  }
+  .muted { color: #94a3b8; font-size: 0.88em; }
+
+  .rf-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 24px 14px;
+    border-bottom: 1px solid var(--rf-card-border);
+    background: linear-gradient(135deg, rgba(249,115,22,0.08) 0%, transparent 60%);
+  }
+  .rf-logo {
+    width: 36px;
+    height: 36px;
+    filter: drop-shadow(0 0 10px var(--rf-orange-glow));
+    flex-shrink: 0;
+  }
+  .rf-header-text { flex: 1; }
+  .rf-header-title { font-size: 1.25em; font-weight: 800; color: #ffffff; letter-spacing: -0.02em; }
+  .rf-header-sub { font-size: 0.78em; color: #94a3b8; font-weight: 500; }
+  .rf-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--rf-green);
+    box-shadow: 0 0 8px var(--rf-green);
+  }
+
+  .nav {
+    display: flex;
+    gap: 4px;
+    padding: 6px 20px;
+    background: rgba(15, 23, 42, 0.8);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--rf-card-border);
+  }
+  .nav button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 15px;
+    border: none;
+    border-radius: var(--radius-btn);
+    background: transparent;
+    color: #94a3b8;
+    font-size: 0.85em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .nav button:hover { background: var(--rf-card-hover); color: #f8fafc; }
+  .nav button.active {
+    background: var(--rf-orange-dim);
+    color: var(--rf-orange);
+    box-shadow: inset 0 0 0 1px var(--rf-orange-glow);
+  }
+
+  .rf-content { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  .tab-section { display: none; }
+  .tab-section.tab-visible { display: block; }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin-bottom: var(--gap);
+  }
+  .stat-card {
+    background: var(--rf-card-bg);
+    border: 1px solid var(--rf-card-border);
+    border-radius: var(--radius-card);
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card .value { font-size: 2.1em; font-weight: 800; color: #fff; line-height: 1.1; }
+  .stat-card .label { font-size: 0.75em; text-transform: uppercase; color: #94a3b8; font-weight: 700; letter-spacing: 0.08em; margin-top: 4px; }
+
+  .card {
+    background: var(--rf-card-bg);
+    border: 1px solid var(--rf-card-border);
+    border-radius: var(--radius-card);
+    padding: 18px 22px;
+    margin-bottom: 14px;
+  }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: var(--radius-pill); font-size: 0.75em; font-weight: 700; letter-spacing: 0.04em; }
+  .badge-direct { background: rgba(248,113,113,0.18); color: var(--rf-red); border: 1px solid rgba(248,113,113,0.3); }
+  .badge-indirect { background: rgba(251,191,36,0.18); color: var(--rf-yellow); border: 1px solid rgba(251,191,36,0.3); }
+  .badge-related { background: rgba(96,165,250,0.18); color: var(--rf-blue); border: 1px solid rgba(96,165,250,0.3); }
+  .badge-possible { background: rgba(52,211,153,0.18); color: var(--rf-green); border: 1px solid rgba(52,211,153,0.3); }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 0.9em; }
+  th { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--rf-card-border); color: #94a3b8; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.08em; }
+  td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); color: #cbd5e1; }
+  tr:hover td { background: var(--rf-card-hover); }
+  .filepath { font-family: 'Cascadia Code', monospace; color: var(--rf-blue); font-size: 0.88em; }
+
+  .graph-container {
+    background: #090d16;
+    border: 1px solid var(--rf-card-border);
+    border-radius: var(--radius-card);
+    height: 480px;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+  .graph-svg { width: 100%; height: 100%; }
 </style>
 </head>
 <body>
-<div style="margin-bottom:var(--gap)">
-  <h1>RepoFlare</h1>
-  <div class="muted">Repository intelligence report</div>
+<div class="rf-header">
+  <svg class="rf-logo" viewBox="0 0 36 36">
+    <circle cx="18" cy="18" r="17" fill="none" stroke="rgba(249,115,22,0.2)" stroke-width="1"/>
+    <path d="M18 5 C18 5 13 10 13 15 C13 17 14.2 18.5 15.8 19.5 C15.3 17.8 16.1 16.2 17.1 15.3 C17.1 17.2 18.3 18.3 18.3 19.8 C19.7 18.8 21.2 17 20.7 14.8 C21.9 16 22.4 17.7 22.1 19.2 C23.8 17.8 24.3 15.8 23.6 14 C25.4 15.3 25.9 17.5 25.2 19.2 C27 17.2 27.2 14.2 25.6 12 C24 9.8 21.6 8.2 18 5 Z" fill="#f97316"/>
+  </svg>
+  <div class="rf-header-text">
+    <div class="rf-header-title">RepoFlare</div>
+    <div class="rf-header-sub">Repository Intelligence · Interactive Dashboard</div>
+  </div>
+  <div class="rf-status-dot" title="Live System Active"></div>
 </div>
+<nav class="nav">
+  <button id="btn-overview" class="active" onclick="switchTab('overview')">⬡ Overview</button>
+  <button id="btn-impact" onclick="switchTab('impact')">⚡ Impact Analysis</button>
+  <button id="btn-graph" onclick="switchTab('graph')">◎ Code Graph</button>
+</nav>
 <div class="muted">D:\repoflare\core</div>
 
-<h2>Snapshot</h2>
-<div style="margin-bottom:var(--gap)"><span class="snap-id">be7de395043f9683</span></div>
-<div class="stat-row">
-  <div class="stat-card"><div class="value">534</div>
-    <div class="label">Nodes</div></div>
-  <div class="stat-card"><div class="value">571</div>
-    <div class="label">Edges</div></div>
+<div class="rf-content">
+<div id="tab-overview" class="tab-section tab-visible">
+  <div class="stat-row">
+    <div class="stat-card"><div class="value">534</div><div class="label">Code Symbols & Files</div></div>
+    <div class="stat-card"><div class="value">571</div><div class="label">Graph Connections</div></div>
+    <div class="stat-card"><div class="value" style="font-size:1.2em"><code style="color:var(--rf-orange)">be7de395043f9683</code></div><div class="label">Latest Snapshot</div></div>
+  </div>
+  <h2>System Status</h2>
+  <div class="card">
+    <p style="margin:0 0 8px;font-weight:600;color:#fff">✔ Code Graph Ready</p>
+    <p class="muted" style="margin:0">RepoFlare has scanned the codebase structure and built a deterministic dependency graph ready for impact analysis and AI explanations.</p>
+  </div>
 </div>
 
-<h2>Changed files <span class="muted">HEAD~1 → HEAD</span></h2>
-<ul class="changed-list"><li>extension/repoflare-0.1.0.vsix</li></ul>
-
-<h2>Affected nodes</h2>
-<div class="empty-state">No affected nodes found.</div>
-<div class="generated">Generated by <code>repoflare export-html</code>.</div>
+<div id="tab-impact" class="tab-section">
+  <h2>Changed Files <span class="muted">(HEAD~1 → HEAD)</span></h2>
+  <div class="card"><ul style="margin:6px 0;padding-left:20px"><li class="filepath">.agents/skills/archify</li></ul></div>
+  <h2>Affected Symbols & Files</h2>
+  <div class="card"><div class="muted">No affected nodes found.</div></div>
+</div>
+<div id="tab-graph" class="tab-section">
+  <h2>Code Dependency Graph</h2>
+  <div class="graph-container">
+    <svg class="graph-svg" viewBox="0 0 800 400">
+      <defs>
+        <radialGradient id="bg-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="rgba(249,115,22,0.12)"/>
+          <stop offset="100%" stop-color="transparent"/>
+        </radialGradient>
+      </defs>
+      <rect width="800" height="400" fill="url(#bg-glow)"/>
+      <line x1="200" y1="200" x2="400" y2="100" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+      <line x1="400" y1="100" x2="600" y2="200" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+      <line x1="400" y1="100" x2="400" y2="300" stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+      <circle cx="200" cy="200" r="14" fill="#60a5fa"/>
+      <circle cx="400" cy="100" r="18" fill="#f97316"/>
+      <circle cx="600" cy="200" r="14" fill="#a78bfa"/>
+      <circle cx="400" cy="300" r="14" fill="#34d399"/>
+      <text x="200" y="232" fill="#94a3b8" font-size="11" text-anchor="middle">scanner.py</text>
+      <text x="400" y="70" fill="#fff" font-size="12" font-weight="bold" text-anchor="middle">graph_store.py</text>
+      <text x="600" y="232" fill="#94a3b8" font-size="11" text-anchor="middle">impact_analyzer.py</text>
+      <text x="400" y="332" fill="#94a3b8" font-size="11" text-anchor="middle">test_graph.py</text>
+    </svg>
+  </div>
+</div>
+</div>
+<script>
+function switchTab(tab) {
+  document.querySelectorAll('.tab-section').forEach(function(el) { el.classList.remove('tab-visible'); });
+  document.querySelectorAll('.nav button').forEach(function(el) { el.classList.remove('active'); });
+  document.getElementById('tab-' + tab).classList.add('tab-visible');
+  document.getElementById('btn-' + tab).classList.add('active');
+}
+</script>
 </body>
 </html>

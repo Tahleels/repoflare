@@ -9,8 +9,8 @@ def test_overview_only_report_has_no_impact_section() -> None:
     html = render_html("/repo", status, impact=None, impact_refs=None)
 
     assert "abc123" in html
-    assert "Nodes" in html
-    assert "Changed files" not in html
+    assert "Code Symbols & Files" in html
+    assert "Changed Files" not in html
 
 
 def test_not_yet_analyzed_shows_placeholder() -> None:
@@ -18,7 +18,7 @@ def test_not_yet_analyzed_shows_placeholder() -> None:
 
     html = render_html("/repo", status)
 
-    assert "not yet analyzed" in html
+    assert "Not yet analyzed" in html
 
 
 def test_impact_section_renders_category_badges() -> None:

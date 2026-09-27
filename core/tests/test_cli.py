@@ -286,7 +286,7 @@ def test_export_html_with_impact_and_custom_output(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert custom_output.exists()
     html = custom_output.read_text(encoding="utf-8")
-    assert "Changed files" in html
+    assert "Changed Files" in html
     assert "a.py" in html
 
 
