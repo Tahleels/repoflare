@@ -72,3 +72,11 @@ id_dsa
 .copilot/
 .cursor/
 .codeium/
+
+# Demo video files (kept locally for reference, not in repo)
+bob_sessions/*.mp4
+extension/*.mp4
+core/scratch/video/out/*.webm
+bob_sessions/demo_frames/
+bob_sessions/*.txt
+.agents/
